@@ -50,9 +50,12 @@ at every depth.
 Because sessions are real PTYs, the agent can also **drive interactive
 programs** (installers, wizards, REPLs): type with `babysit_send`
 (text or named keys) and read the rendered screen with
-`babysit_check { screen: true }` — a capability neither retired extension had.
+`babysit_check { description, screen: true }` — a capability neither retired extension had.
 
 ## Tools (LLM-callable)
+
+All five tools require a short, non-blank `description` explaining the purpose
+of that call.
 
 | Tool | What it does |
 | ---- | ------------ |
@@ -71,26 +74,35 @@ calls if another extension or preset re-enables `bash`, including shell
 backgrounding (`… &`, `nohup`, `setsid`, `disown`). Set
 `PI_BABYSIT_ALLOW_BASH=1` to retain direct `bash` explicitly.
 
-## Describe every run
+## Describe every operation
 
-Every `babysit_run` requires a non-blank `description`, for both commands and
-subagents. Explain the purpose briefly in language the user can understand;
-`name` remains a stable session identifier, while `command` / `task` contains
-the actual execution instructions. Descriptions are trimmed before saving and
-are display metadata, not shell code or instructions sent to the subagent.
+Every babysit tool call requires a non-blank `description`. Explain the purpose
+briefly in language the user can understand. For `babysit_run`, `name` remains
+a stable session identifier, while `command` / `task` contains the execution
+instructions. Its description is trimmed and saved with the session. For
+`babysit_check`, `babysit_send`, `babysit_wait`, and `babysit_kill`, the description
+explains only that operation and never overwrites the session description.
+Descriptions are display metadata, not shell code, stdin, or instructions sent
+to the subagent.
 
 ```text
 babysit_run { description: "Run regression tests", command: "bun test", foreground: true }
 babysit_run { description: "Review the authentication changes", profile: "subagent", task: "Review the authentication diff for security regressions", maxTurns: 5 }
+babysit_check { description: "Inspect build errors", id: "build", pattern: "ERROR" }
+babysit_wait { description: "Wait for the build to finish", id: "build" }
+babysit_send { description: "Ask the reviewer to check authorization too", id: "review", text: "Also check authorization." }
+babysit_kill { description: "Stop the unused development server", id: "dev-server" }
 ```
 
 In Pi's main transcript the description is the prominent yellow heading, with
-the execution kind in muted gray. The full command or task is always visible
+the tool name and execution kind in muted gray. The full command or task (or
+all other operation arguments, including target IDs and input) is always visible
 in gray beneath it, even when tool results are collapsed. Session lists, the
-widget, and completion notifications also show the description. Older saved sessions and tool calls
-without one remain readable, falling back to their command or task. Callers
-must supply a description for new runs; blank or missing values are rejected
-before launch.
+widget, and completion notifications show the session's original description.
+Older saved sessions and tool calls without descriptions remain readable,
+falling back to their command, task, or other arguments. Callers must supply a
+description for every new call; blank or missing values are rejected before
+execution.
 
 ## Remote processes over SSH
 
@@ -102,9 +114,9 @@ pi-babysit does not install remote software or copy credentials.
 ```text
 babysit_run { description: "Run tests on Linux", host: "yusuke-t4", cwd: "/home/yusuke/project", command: "bun test", foreground: true, returnLines: 30 }
 babysit_run { description: "Open a remote Python REPL", host: "user@server", command: "python3 -i", name: "remote-repl", continueAfterStart: true }
-babysit_check { id: "remote-repl", screen: true }
-babysit_send { id: "remote-repl", text: "print(42)" }
-babysit_kill { id: "remote-repl" }
+babysit_check { description: "Read the remote REPL screen", id: "remote-repl", screen: true }
+babysit_send { description: "Evaluate a value in the remote REPL", id: "remote-repl", text: "print(42)" }
+babysit_kill { description: "Close the remote REPL", id: "remote-repl" }
 ```
 
 `host` omitted (or `"local"`) preserves local behavior. `cwd` is process-only:
@@ -204,8 +216,8 @@ pending for the next poll. Larger output stays out of model context. Inspect it
 through the session id without creating another shell session:
 
 ```text
-babysit_check { id: "cargo-test", lines: 50 }
-babysit_check { id: "cargo-test", pattern: "FAIL|ERROR", lines: 50 }
+babysit_check { description: "Inspect the recent test output", id: "cargo-test", lines: 50 }
+babysit_check { description: "Find test failures", id: "cargo-test", pattern: "FAIL|ERROR", lines: 50 }
 ```
 
 Tail and search results are capped at 200 lines and default to a 4 KB total

@@ -45,13 +45,21 @@ try {
  const meta=JSON.parse(fs.readFileSync(process.env.PI_BABYSIT_DIR+'/meta/'+id+'.json','utf8'));
  assert.equal(meta.description,'Inspect description persistence');
  assert.equal(meta.task,'Execute ONLY the actual fake task.');
+ const call=async(name,args)=>{const result=await tools.get('babysit_'+name).execute('operation-test',args,undefined,undefined,ctx);assert(!result.isError,JSON.stringify(result));return result;};
+ const unchanged=()=>{const current=JSON.parse(fs.readFileSync(process.env.PI_BABYSIT_DIR+'/meta/'+id+'.json','utf8')); for(const key of ['name','description','launchCommand','reapAfter','startedAt']) assert.deepEqual(current[key],meta[key],key+' changed during an operation');};
+ await call('wait',{id,timeout:'5s',description:'Wait for initial fake task'}); unchanged();
+ await call('check',{id,description:'Inspect fake worker status'}); unchanged();
+ await call('send',{id,text:'Follow up ONLY with this exact text.',mode:'task',description:'Dispatch followup without leaking purpose'}); unchanged();
+ await call('wait',{id,timeout:'5s',description:'Wait for followup fake task'}); unchanged();
+ await call('kill',{id,description:'Stop fake worker'}); unchanged();
  const requests=fs.readFileSync(process.env.FAKE_PI_CAPTURE,'utf8').trim().split('\\n').map(line=>JSON.parse(line));
  const prompt=requests.find(request=>request.type==='prompt');
  assert.equal(prompt.message,'Task: Execute ONLY the actual fake task.');
- assert(!JSON.stringify(requests).includes('Inspect description persistence'));
+ assert.equal(requests.filter(request=>request.type==='prompt').at(-1).message,'Follow up ONLY with this exact text.');
+ for(const description of ['Inspect description persistence','Wait for initial fake task','Inspect fake worker status','Dispatch followup without leaking purpose','Wait for followup fake task','Stop fake worker']) assert(!JSON.stringify(requests).includes(description));
  console.log('fake description persistence passed');
 } finally {
- await tools.get('babysit_kill').execute('cleanup',{id},undefined,undefined,ctx);
+ await tools.get('babysit_kill').execute('cleanup',{id,description:'Clean up fake subagent'},undefined,undefined,ctx);
 }
 `);
 	try {

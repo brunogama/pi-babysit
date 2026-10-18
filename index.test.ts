@@ -1345,8 +1345,8 @@ test("a completed subagent task charges nested usage to the parent exactly once"
 	);
 
 	const [first, second] = await Promise.all([
-		tools.get("babysit_wait").execute("usage-first", { id: processResult.details.id }),
-		tools.get("babysit_wait").execute("usage-second", { id: processResult.details.id }),
+		tools.get("babysit_wait").execute("usage-first", { description: "Verify wait behavior", id: processResult.details.id }),
+		tools.get("babysit_wait").execute("usage-second", { description: "Verify wait behavior", id: processResult.details.id }),
 	]);
 	const charged = [first.usage, second.usage].filter(Boolean);
 	expect(charged).toEqual([{
@@ -1357,7 +1357,7 @@ test("a completed subagent task charges nested usage to the parent exactly once"
 		totalTokens: 424,
 		cost: { input: 0.1, output: 0.2, cacheRead: 0.03, cacheWrite: 0.01, total: 0.34 },
 	}]);
-	const repeated = await tools.get("babysit_wait").execute("usage-repeated", {
+	const repeated = await tools.get("babysit_wait").execute("usage-repeated", { description: "Verify wait behavior",
 		id: processResult.details.id,
 	});
 	expect(repeated.usage).toBeUndefined();
@@ -2052,7 +2052,7 @@ test("long subagent messages fail before spawn when the read tool is unavailable
 test("multi-wait rejects duplicates and excessive fan-out before spawning waits", async () => {
 	const duplicate = await tools.get("babysit_wait").execute(
 		"duplicate-wait",
-		{ ids: ["same", "same"] },
+		{ description: "Verify wait behavior", ids: ["same", "same"] },
 		undefined,
 		undefined,
 		ctx,
@@ -2062,7 +2062,7 @@ test("multi-wait rejects duplicates and excessive fan-out before spawning waits"
 
 	const excessive = await tools.get("babysit_wait").execute(
 		"excessive-wait",
-		{ ids: Array.from({ length: 33 }, (_, index) => `job-${index}`) },
+		{ description: "Verify wait behavior", ids: Array.from({ length: 33 }, (_, index) => `job-${index}`) },
 		undefined,
 		undefined,
 		ctx,
@@ -2075,7 +2075,7 @@ test("invalid wait durations fail instead of becoming infinite waits", async () 
 	await expect(
 		tools.get("babysit_wait").execute(
 			"invalid-wait-timeout",
-			{ id: "does-not-matter", timeout: "5minutes" },
+			{ description: "Verify wait behavior", id: "does-not-matter", timeout: "5minutes" },
 			undefined,
 			undefined,
 			ctx,
@@ -2587,7 +2587,7 @@ test("attached foreground abort terminates while detached foreground abort prese
 	expect(attached.content[0]?.text).toContain("attached lifecycle cleanup confirmed terminal state");
 	const attachedStatus = await tools.get("babysit_check").execute(
 		"check-attached-abort",
-		{ id: attached.details.id },
+		{ description: "Verify check behavior", id: attached.details.id },
 		undefined,
 		undefined,
 		ctx,
@@ -2608,7 +2608,7 @@ test("attached foreground abort terminates while detached foreground abort prese
 		expect(detached.content[0]?.text).toContain("was interrupted");
 		const detachedStatus = await tools.get("babysit_check").execute(
 			"check-detached-abort",
-			{ id: detached.details.id },
+			{ description: "Verify check behavior", id: detached.details.id },
 			undefined,
 			undefined,
 			ctx,
@@ -2617,7 +2617,7 @@ test("attached foreground abort terminates while detached foreground abort prese
 	} finally {
 		await tools.get("babysit_kill").execute(
 			"cleanup-detached-abort",
-			{ id: detached.details.id },
+			{ description: "Verify kill behavior", id: detached.details.id },
 			undefined,
 			undefined,
 			ctx,
@@ -2640,7 +2640,7 @@ test("babysit_kill returns success only after terminal state is persisted", asyn
 	try {
 		const result = await tools.get("babysit_kill").execute(
 			"test",
-			{ id },
+			{ description: "Verify kill behavior", id },
 			undefined,
 			undefined,
 			ctx,
@@ -2883,16 +2883,16 @@ test("babysit_check searches a session log with bounded latest matches", async (
 	const result = await run(
 		"python3 -c \"print('\\\\n'.join(f'ERROR {i}' for i in range(205))); print('INFO ignored')\"",
 	);
-	const before = await tools.get("babysit_check").execute("test", {});
-	const checked = await tools.get("babysit_check").execute("test", {
+	const before = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",});
+	const checked = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",
 		id: result.details.id,
 		pattern: "ERROR",
 		lines: 500,
 		maxBytes: 24_000,
 	});
-	const after = await tools.get("babysit_check").execute("test", {});
-	const allSessions = await tools.get("babysit_check").execute("test", { state: "all" });
-	const noSubagents = await tools.get("babysit_check").execute("test", {
+	const after = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",});
+	const allSessions = await tools.get("babysit_check").execute("test", { description: "Verify check behavior", state: "all" });
+	const noSubagents = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",
 		state: "all",
 		kind: "subagent",
 	});
@@ -2913,14 +2913,14 @@ test("babysit_check searches a session log with bounded latest matches", async (
 	expect(matches.at(-1)).toEndWith("ERROR 204");
 	expect(text).not.toContain("INFO ignored");
 
-	const invalid = await tools.get("babysit_check").execute("test", {
+	const invalid = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",
 		id: result.details.id,
 		pattern: "[",
 	});
 	expect(invalid.isError).toBe(true);
 	expect(invalid.content[0]?.text).toContain("Invalid pattern");
 
-	const missing = await tools.get("babysit_check").execute("test", {
+	const missing = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",
 		id: "definitely-not-a-session",
 		pattern: "ERROR",
 	});
@@ -2928,7 +2928,7 @@ test("babysit_check searches a session log with bounded latest matches", async (
 	expect(missing.content[0]?.text).toContain("No such session");
 
 	unlinkSync(result.details.logPath);
-	const missingLog = await tools.get("babysit_check").execute("test", {
+	const missingLog = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",
 		id: result.details.id,
 		pattern: "ERROR",
 	});
@@ -2996,12 +2996,12 @@ test("large output stays out of the run result and remains available through bou
 	expect(Buffer.byteLength(text)).toBeLessThan(1000);
 	expect(text).not.toContain("LAST-MARKER");
 
-	const checked = await tools.get("babysit_check").execute("test", { id: result.details.id, lines: 2 });
+	const checked = await tools.get("babysit_check").execute("test", { description: "Verify check behavior", id: result.details.id, lines: 2 });
 	const checkedText = checked.content[0]?.text ?? "";
 	expect(checkedText).toContain("LAST-MARKER");
 	expect(checkedText).toContain("bytes elided");
 	expect(Buffer.byteLength(checkedText)).toBeLessThanOrEqual(4_000);
-	const tighter = await tools.get("babysit_check").execute("test", {
+	const tighter = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",
 		id: result.details.id,
 		lines: 2,
 		maxBytes: 1_500,
@@ -3011,7 +3011,7 @@ test("large output stays out of the run result and remains available through bou
 
 test("process checks bound huge command metadata without crowding out recent output", async () => {
 	const result = await run(`printf '${"x".repeat(20_000)}' >/dev/null; printf 'CHECK-TAIL-MARKER\\n'`);
-	const checked = await tools.get("babysit_check").execute("test", {
+	const checked = await tools.get("babysit_check").execute("test", { description: "Verify check behavior",
 		id: result.details.id,
 		lines: 2,
 	});

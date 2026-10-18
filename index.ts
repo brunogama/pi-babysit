@@ -51,6 +51,18 @@ import { Type, type TSchema } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents";
 
+const descriptionSchema = Type.String({
+	minLength: 1,
+	pattern: "\\S",
+	description: "Required short human-readable purpose for this operation. Explain what it does and why; shown prominently to the user.",
+});
+
+function requireDescription(value: unknown): void {
+	if (typeof value !== "string" || !value.trim()) {
+		throw new Error("`description` is required and must be a non-blank string for every babysit tool call.");
+	}
+}
+
 // Dedicated babysit state root so pi-managed sessions never collide with the
 // user's own manual `babysit` sessions. The base is namespaced per pi session
 // on session_start (BABYSIT_DIR=<base>/<session-id>), so each pi session only
@@ -1371,6 +1383,17 @@ function escapeCommandForDisplay(command: string): string {
 		.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, (char) =>
 			`\\x${char.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`,
 		);
+}
+
+function renderOperationCall(name: string, args: Record<string, unknown> | undefined, theme: Theme) {
+	const { description, ...operationArgs } = args ?? {};
+	const purpose = typeof description === "string" ? description.trim() : "";
+	const title = theme.fg("muted", theme.bold(name));
+	const heading = purpose
+		? `${title}  ${theme.fg("warning", theme.bold(escapeCommandForDisplay(purpose)))}`
+		: title;
+	const raw = Object.keys(operationArgs).length ? JSON.stringify(operationArgs) : "";
+	return new Text(heading + (raw ? `\n${theme.fg("muted", escapeCommandForDisplay(raw))}` : ""), 0, 0);
 }
 
 export function readableLaunchCommand(command: string): string {
@@ -3286,7 +3309,7 @@ async function waitForTask(
 				ok: completed.ok,
 				text:
 					`Subagent ${id} finished its task (${stats}).\n` +
-					`${subagentReuseHint(readMeta(id)?.reapAfter)} Follow-up: babysit_send { id: "${id}" }, ` +
+					`${subagentReuseHint(readMeta(id)?.reapAfter)} Follow-up: babysit_send { description: "Assign a follow-up task", id: "${id}" }, ` +
 					`or babysit_kill when done.\n\n${completed.body}`,
 				status: st,
 				progress: prog,
@@ -3714,7 +3737,14 @@ export default function (pi: ExtensionAPI) {
 		const execute = tool.execute;
 		pi.registerTool({
 			...tool,
+			description: tool.description + " Always provide a short human-readable `description` explaining the purpose of this operation.",
+			promptGuidelines: [
+				"Every babysit tool call requires a short description explaining its purpose for the user. Operation descriptions for check/send/wait/kill do not change the session's original description.",
+				...(tool.promptGuidelines ?? []),
+			],
+			renderCall: tool.renderCall ?? ((args, theme) => renderOperationCall(tool.name, args as Record<string, unknown>, theme)),
 			async execute(toolCallId, params, signal, onUpdate, ctx) {
+				requireDescription((params as { description?: unknown }).description);
 				const result = await execute(toolCallId, params, signal, onUpdate, ctx);
 				if ((result as typeof result & { isError?: boolean }).isError === true) {
 					declaredToolErrors.add(toolCallId);
@@ -4319,7 +4349,7 @@ export default function (pi: ExtensionAPI) {
 			block: true,
 			reason:
 				"Use babysit_run for shell commands so output is supervised and captured outside model context. " +
-				"Inspect an existing session log with babysit_check { id, lines, pattern? }. " +
+				"Inspect an existing session log with babysit_check { description, id, lines, pattern? }. " +
 				`Retry with a short purpose description as babysit_run({ description: "Explain the purpose of this command", command: ${JSON.stringify(command)} }).`,
 		};
 	});
@@ -4330,13 +4360,11 @@ export default function (pi: ExtensionAPI) {
 		label: "Babysit: run",
 		description:
 			"Run a supervised shell command, or start a reusable pi subagent with `profile: \"subagent\"`. " +
-			"Always provide a short human-readable `description` of what this run does and why. " +
 			"Use `foreground` for results needed now; otherwise long commands notify on exit. Full logs stay on disk. " +
 			"`returnPattern`/`returnLines` bound foreground output. Sessions support check, wait, send, and kill.",
 		promptSnippet: "Run supervised commands or bounded pi subagents with context-safe logs",
 		promptGuidelines: [
 			"Use babysit_run for shell commands and give meaningful sessions a stable name; bundle tiny related read-only observations into one command.",
-			"Every babysit_run requires a short description explaining its purpose for the user, for both commands and subagents. Describe the actual work, not a generic 'run command' or 'start agent'.",
 			"Use babysit_run foreground mode for one process or subagent whose result is needed now; never issue sibling foreground runs in parallel. For parallel process checks, start background runs with continueAfterStart and collect them with one multi-session babysit_wait.",
 			"Use returnPattern/returnLines for noisy commands. During edit/fix loops run targeted checks first and one full validation suite at the end instead of repeating every full gate.",
 			"After a background process starts, stop the turn for its automatic notification; never poll or sleep. Use continueAfterStart only for specific non-polling process work.",
@@ -4350,11 +4378,7 @@ export default function (pi: ExtensionAPI) {
 			return prepareBabysitRunArguments(args) as never;
 		},
 		parameters: Type.Object({
-			description: Type.String({
-				minLength: 1,
-				pattern: "\\S",
-				description: "Required short human-readable purpose for this command or subagent. Explain what it does and why; shown prominently to the user.",
-			}),
+			description: descriptionSchema,
 			host: Type.Optional(Type.String({ description: "Process SSH destination/config alias (default local). Remote subagents are unsupported." })),
 			cwd: Type.Optional(Type.String({ description: "Process working directory. Remote default is login home; never inferred from local cwd." })),
 			command: Type.Optional(
@@ -4485,9 +4509,6 @@ export default function (pi: ExtensionAPI) {
 
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			if (typeof params.description !== "string" || !params.description.trim()) {
-				throw new Error("`description` is required and must be a non-blank string for both commands and subagents.");
-			}
 			const description = params.description.trim();
 			await requireBabysit();
 			const isSubagent = params.profile === "subagent";
@@ -4702,8 +4723,8 @@ export default function (pi: ExtensionAPI) {
 							text:
 								`${retried ? "Retried once after external worker death.\n" : ""}` +
 								`Process started (id: ${res.id}). ${NOTIFY_MARKER}\nDescription: ${escapeCommandForDisplay(description)}\nLog: ${logPath(res.id)}\n${nextStep}\n` +
-								`Inspect: babysit_check { id: "${res.id}" } (screen: true for TUIs) · ` +
-								`Wait: babysit_wait { id: "${res.id}" } · Kill: babysit_kill { id: "${res.id}" }\n` +
+								`Inspect: babysit_check { description: "Inspect session output", id: "${res.id}" } (screen: true for TUIs) · ` +
+								`Wait: babysit_wait { description: "Wait for completion", id: "${res.id}" } · Kill: babysit_kill { description: "Stop this session", id: "${res.id}" }\n` +
 								`Human can watch/take over: /babysit`,
 						},
 					],
@@ -4810,8 +4831,8 @@ export default function (pi: ExtensionAPI) {
 						text:
 							`Subagent started (id: ${res.id})${agent ? ` [agent: ${agent.name}]` : ""}${res.model ? ` [model: ${res.model}]` : ""} [depth: ${subagentNesting.childDepth}/${subagentNesting.maxDepth}].\n` +
 							`Description: ${escapeCommandForDisplay(description)}\nTask accepted — running in the background. You MUST collect it with babysit_wait before finishing the parent task; use foreground: true next time when no independent work is available.\n` +
-							`Progress: babysit_check { id: "${res.id}" } (only when inspection is needed)\n` +
-							`Collect:  babysit_wait  { id: "${res.id}" }\n` +
+							`Progress: babysit_check { description: "Inspect agent progress", id: "${res.id}" } (only when inspection is needed)\n` +
+							`Collect:  babysit_wait  { description: "Collect the agent result", id: "${res.id}" }\n` +
 							`Human can watch/steer: /babysit (pick ${res.id})`,
 					},
 				],
@@ -4895,6 +4916,7 @@ export default function (pi: ExtensionAPI) {
 			"Do NOT poll this while merely waiting for a process to end — the exit notification is automatic.",
 		promptSnippet: "Check status/progress of babysit sessions (processes and subagents)",
 		parameters: Type.Object({
+			description: descriptionSchema,
 			id: Type.Optional(Type.String({ description: "Session id. Omit to list sessions." })),
 			state: Type.Optional(
 				StringEnum(["running", "terminal", "all"] as const, {
@@ -5135,11 +5157,12 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Send input to a babysit session. Process: `text` types a line into its stdin (PTY), " +
 			"`keys` presses named keys (Enter, Tab, Esc, Up/Down/Left/Right, C-c, F1…) — use with " +
-			"babysit_check { screen: true } to drive interactive programs. Subagent: `text` is " +
+			"babysit_check { description, screen: true } to drive interactive programs. Subagent: `text` is " +
 			"STEERING while it works, or a NEW TASK after the current task settles (mode: auto/steer/task) — this " +
 			"is how you resume a finished subagent with full context.",
 		promptSnippet: "Send text/keys to a process, or steering/follow-up tasks to a subagent",
 		parameters: Type.Object({
+			description: descriptionSchema,
 			id: Type.String({ description: "Session id." }),
 			text: Type.Optional(
 				Type.String({ description: "Text to send (a line for processes; a message for subagents)." }),
@@ -5211,7 +5234,7 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `Sent to ${params.id}. Read the reaction with babysit_check { id: "${params.id}"${params.keys?.length ? ", screen: true" : ""} } — don't expect the echo of your own input.`,
+							text: `Sent to ${params.id}. Read the reaction with babysit_check { description: "Inspect the response to input", id: "${params.id}"${params.keys?.length ? ", screen: true" : ""} } — don't expect the echo of your own input.`,
 						},
 					],
 					details: { kind: "process" },
@@ -5328,6 +5351,11 @@ export default function (pi: ExtensionAPI) {
 				// New task → new bookkeeping window, so check/wait track THIS task.
 				writeMeta(params.id, {
 					kind: "subagent",
+					name: meta?.name,
+					description: meta?.description,
+					launchCommand: meta?.launchCommand,
+					reapAfter: meta?.reapAfter,
+					startedAt: meta?.startedAt,
 					task: params.text,
 					// Start after the prompt-acceptance response. This excludes a
 					// preceding run that settled between `send` and RPC acceptance.
@@ -5389,6 +5417,7 @@ export default function (pi: ExtensionAPI) {
 			"the exit notification will resume you.",
 		promptSnippet: "Block until session(s) finish — process exit / output pattern / subagent task done",
 		parameters: Type.Object({
+			description: descriptionSchema,
 			id: Type.Optional(Type.String({ description: "Session id (single wait)." })),
 			ids: Type.Optional(
 				Type.Array(Type.String(), {
@@ -5535,7 +5564,10 @@ export default function (pi: ExtensionAPI) {
 		label: "Babysit: kill",
 		description: "Terminate a babysit session (process or subagent).",
 		promptSnippet: "Terminate a babysit session",
-		parameters: Type.Object({ id: Type.String({ description: "Session id." }) }),
+		parameters: Type.Object({
+			description: descriptionSchema,
+			id: Type.String({ description: "Session id." }),
+		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			await requireBabysit();
 			// Prevent the exit poller racing a requested kill, but restore delivery

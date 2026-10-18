@@ -85,9 +85,9 @@ babysit_run { description: "Review the authentication changes", profile: "subage
 ```
 
 In Pi's main transcript the description is the prominent yellow heading, with
-the execution kind in muted gray. Expand the tool call (`Ctrl+O` by default) to
-see the full command or task in gray. Session lists, the widget, and completion
-notifications also show the description. Older saved sessions and tool calls
+the execution kind in muted gray. The full command or task is always visible
+in gray beneath it, even when tool results are collapsed. Session lists, the
+widget, and completion notifications also show the description. Older saved sessions and tool calls
 without one remain readable, falling back to their command or task. Callers
 must supply a description for new runs; blank or missing values are rejected
 before launch.

@@ -183,10 +183,11 @@ test("babysit_run description rendering separates labels from raw payloads", () 
 		expect(collapsed).toContain("<muted><bold>babysit_run");
 		expect(collapsed).toContain("<warning>");
 		expect(collapsed).toContain("<bold>Run checks</bold>");
-		expect(collapsed).not.toMatch(/RAW_COMMAND|RAW_TASK/);
+		const detail = "command" in payload ? payload.command : payload.task;
+		expect(collapsed).toContain(`<muted>${detail}</muted>`);
 		const expanded = tool.renderCall(args, theme, { expanded: true }).render(1000).join("\n");
-		expect(expanded).toContain("<muted>");
-		expect(expanded).toContain("command" in payload ? payload.command! : payload.task!);
+		expect(expanded).toContain(`<muted>${detail}</muted>`);
+		expect(expanded).toBe(collapsed);
 		expect(expanded.split("\n").length).toBeGreaterThan(1);
 	}
 	const unsafe = tool.renderCall({ command: "echo raw", description: "first\n\x1b[31msecond" }, theme).render(1000).join("\n");
@@ -228,7 +229,7 @@ test("widget description overrides host and raw details while full viewer retain
 	widget.update([], [{
 		id: "described", header: "described PROCESS RUNNING", active: true, viewable: true, tail: [],
 		description: "\x1b[33mCheck remote build\x1b[0m",
-		details: ["host: alpha  echo RAW_COMMAND", "Check remote build"],
+		details: ["host: alpha", "Check remote build", "echo RAW_COMMAND"],
 	}]);
 	const list = widget.render(120).join("\n");
 	expect(list).toContain("Check remote build");
@@ -237,7 +238,31 @@ test("widget description overrides host and raw details while full viewer retain
 	widget.open("described");
 	const viewer = widget.render(120).join("\n");
 	expect(viewer).toContain("RAW_COMMAND");
+	expect(viewer).toContain("Check remote build");
 	expect(viewer).toContain("alpha");
+});
+
+test("local process and agent log views retain payloads after the description", () => {
+	for (const isAgent of [false, true]) {
+		const payload = isAgent ? "ACTUAL_AGENT_PROMPT" : "echo ACTUAL_COMMAND";
+		const widget = createSessionWidget({
+			getHeight: () => 25,
+			requestRender() {},
+			getTheme: () => ({ fg: (_: string, text: string) => text }) as any,
+			readLog: () => ({ text: "", isAgent }),
+		});
+		widget.update([], [{
+			id: "described", header: "described", active: true, viewable: true, tail: [],
+			description: "Human-readable purpose",
+			details: ["Human-readable purpose", ...(isAgent ? [`task: ${payload}`, "pi ACTUAL_LAUNCH_COMMAND"] : [payload])],
+		}]);
+		expect(widget.render(120).join("\n")).not.toContain(payload);
+		widget.open("described");
+		const viewer = widget.render(120).join("\n");
+		expect(viewer).toContain("Human-readable purpose");
+		expect(viewer).toContain(payload);
+		if (isAgent) expect(viewer).toContain("ACTUAL_LAUNCH_COMMAND");
+	}
 });
 
 test("widget labels make session kind and state explicit without visual clutter", () => {

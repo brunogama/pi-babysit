@@ -2709,8 +2709,9 @@ export function createSessionWidget(options: {
 		const log = options.readLog(selectedId);
 		const session = displays.find((session) => session.id === selectedId);
 		const header = session?.header ?? selectedId;
-		const detail = session?.details?.[0] ?? "";
-		const context = detail.startsWith("task: ") ? detail.slice(6) : detail;
+		const context = (session?.details ?? [])
+			.map((detail) => detail.startsWith("task: ") ? detail.slice(6) : detail)
+			.join("\n");
 		if (log.file) {
 			if (!source || source.file !== log.file || source.isAgent !== log.isAgent)
 				source = new FileLogSource(log.file, log.isAgent);
@@ -4830,7 +4831,7 @@ export default function (pi: ExtensionAPI) {
 		},
 		// The human-readable purpose is primary; the executable payload is secondary.
 		// Legacy calls without descriptions still render their original payload safely.
-		renderCall(args, theme, context) {
+		renderCall(args, theme) {
 			const isSubagent = args.profile === "subagent";
 			const kind = isSubagent ? "AGENT" : "COMMAND";
 			const payload = isSubagent ? args.task : args.command;
@@ -4841,8 +4842,8 @@ export default function (pi: ExtensionAPI) {
 			const heading = description
 				? `${title}  ${theme.fg("warning", theme.bold(escapeCommandForDisplay(description)))}`
 				: `${title}${raw ? theme.fg("muted", `  ${raw}`) : ""}`;
-			const detail = description && raw && context?.expanded
-				? `\n${theme.fg("muted", `${isSubagent ? "task" : "command"}: ${raw}`)}`
+			const detail = description && raw
+				? `\n${theme.fg("muted", raw)}`
 				: "";
 			return new Text(heading + detail, 0, 0);
 		},

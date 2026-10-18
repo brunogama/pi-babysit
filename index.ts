@@ -2625,7 +2625,7 @@ interface WidgetMouseEvent {
 }
 
 /**
- * Compact session list. Item presses open a viewer; rows never expand inline.
+ * Compact session list. Item presses toggle the session's inline viewer.
  */
 export function createWidgetComponent(
 	summaryLines: string[],
@@ -2683,6 +2683,9 @@ export function createWidgetComponent(
 			}
 			return lines;
 		},
+		getSessionLine(id: string) {
+			return targetByLine.findIndex((target) => target?.type === "session" && target.id === id);
+		},
 		handleMouse(event: WidgetMouseEvent) {
 			if (event.button !== "left") return undefined;
 			const target = targetByLine[event.y];
@@ -2727,7 +2730,19 @@ export function createSessionWidget(options: {
 	let displays: WidgetSessionDisplay[] = [];
 	let viewer: ReturnType<typeof createLogViewer> | undefined;
 	let source: FileLogSource | undefined;
-	let list = createWidgetComponent([], [], open, listState);
+	let summaryLines: string[] = [];
+	let listHeight = 0;
+	let viewerRow = -1;
+	let viewerLines = 0;
+	let dragging = false;
+	let list = createWidgetComponent([], [], toggle, listState);
+	function rebuildList() {
+		list = createWidgetComponent(summaryLines, displays, toggle, listState);
+	}
+	function toggle(id: string) {
+		if (selectedId === id) close();
+		else open(id);
+	}
 	function refreshViewer() {
 		if (!selectedId || !viewer) return;
 		const log = options.readLog(selectedId);
@@ -2747,18 +2762,30 @@ export function createSessionWidget(options: {
 	}
 	function close() {
 		selectedId = undefined;
+		viewerRow = -1;
+		viewerLines = 0;
+		dragging = false;
 		viewer?.dispose();
 		viewer = undefined;
 		source = undefined;
 		options.requestRender();
 	}
 	function open(id: string) {
+		if (!displays.some((session) => session.id === id)) {
+			displays = [...displays, { id, header: id, tail: [], viewable: true, active: true }];
+		}
+		if (listState.mode === "running" && !displays.find((session) => session.id === id)?.active)
+			listState.mode = "all";
+		const visible = listState.mode === "running" ? displays.filter((session) => session.active) : displays;
+		listState.page = Math.floor(visible.findIndex((session) => session.id === id) / WIDGET_SESSION_PAGE_SIZE);
+		rebuildList();
+		dragging = false;
 		viewer?.dispose();
 		source = undefined;
 		selectedId = id;
 		viewer = createLogViewer({
 			...options,
-			getHeight: () => Math.min(WIDGET_VIEWER_MAX_LINES, options.getHeight()),
+			getHeight: () => Math.max(3, Math.min(WIDGET_VIEWER_MAX_LINES, options.getHeight() - listHeight + 1)),
 			onClose: close,
 		});
 		refreshViewer();
@@ -2774,15 +2801,36 @@ export function createSessionWidget(options: {
 		},
 		update(summary: string[], sessions: WidgetSessionDisplay[]) {
 			displays = sessions;
-			list = createWidgetComponent(summary, sessions, open, listState);
+			summaryLines = summary;
+			rebuildList();
+			if (selectedId && !sessions.some((session) => session.id === selectedId && (listState.mode === "all" || session.active))) close();
 			refreshViewer();
 			options.requestRender();
 		},
-		render(width: number) { return (viewer ?? list).render(width); },
+		render(width: number) {
+			const lines = list.render(width);
+			listHeight = lines.length;
+			viewerRow = selectedId ? list.getSessionLine(selectedId) : -1;
+			viewerLines = 0;
+			if (viewer && viewerRow >= 0) {
+				// Keep the original styled row as the toggle header.
+				const body = viewer.render(width).slice(1);
+				viewerLines = body.length;
+				lines.splice(viewerRow + 1, 0, ...body);
+			}
+			return lines;
+		},
 		handleMouse(event: TuiMouseEvent) {
-			// Stock Pi widget hosts forward mouse input to this component, not
-			// to a nested native layout tree. Keep the full wheel/drag event.
-			return (viewer ?? list).handleMouse(event);
+			if (viewer && viewerRow >= 0 && (dragging || (event.y > viewerRow && event.y <= viewerRow + viewerLines))) {
+				const result = viewer.handleMouse({ ...event, y: event.y - viewerRow });
+				if (result && "capture" in result && result.capture) dragging = true;
+				if (event.type === "release") dragging = false;
+				return result;
+			}
+			const mode = listState.mode, page = listState.page;
+			const result = list.handleMouse({ ...event, y: event.y > viewerRow && viewerRow >= 0 ? event.y - viewerLines : event.y });
+			if (mode !== listState.mode || page !== listState.page) close();
+			return result;
 		},
 		handleKey(data: string) { return viewer?.handleKey(data) ?? false; },
 		invalidate() { list.invalidate(); viewer?.invalidate(); },

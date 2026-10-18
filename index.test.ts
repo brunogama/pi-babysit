@@ -719,7 +719,7 @@ function sessionWidgetFixture(height = 20) {
 	return { widget, host, render, mouse, rows, reads, setLog: (text: string) => { log = text; }, renders: () => renders };
 }
 
-test("stock widget host toggles a ten-line viewer and preserves all mode and page", () => {
+test("stock widget host expands inline and preserves the title, other rows, mode and page", () => {
 	const { widget, render, mouse, reads, renders } = sessionWidgetFixture();
 	const initial = render()[0];
 	mouse({ x: initial.indexOf("babysits") });
@@ -730,18 +730,52 @@ test("stock widget host toggles a ten-line viewer and preserves all mode and pag
 	mouse({ y: 1 });
 	mouse({ type: "click", y: 1 });
 	expect(reads).toEqual(["job-10"]);
-	expect(render()).toHaveLength(10);
-	expect(render()[0]).toContain("job-10");
+	expect(render()).toHaveLength(page.length + 9);
+	expect(render()[0]).toBe(page[0]);
+	expect(render()[1]).toBe(page[1]);
+	expect(render().slice(-2)).toEqual(page.slice(-2));
 	expect(render().join("\n")).toMatch(/[│┃]/);
 	expect(widget.handleKey("\x1b")).toBe(false);
-	expect(mouse({ x: 2, y: 0 })?.handled).toBe(true);
-	mouse({ type: "click", x: 2, y: 0 });
+	expect(mouse({ x: 2, y: 1 })?.handled).toBe(true);
+	mouse({ type: "click", x: 2, y: 1 });
 	expect(render()).toEqual(page);
 	expect(renders()).toBeGreaterThan(0);
 });
 
+test("session widget toggles one row at a time without changing styled headers", () => {
+	const { widget, render, mouse, rows, reads } = sessionWidgetFixture();
+	const styled = rows.slice(0, 3).map((row) => ({ ...row, header: `\x1b[32m${row.header}\x1b[0m` }));
+	widget.update(["\x1b[32mRUNNING\x1b[0m"], styled);
+	const collapsed = render();
+	mouse({ y: 1 });
+	expect(render()[0]).toBe(collapsed[0]);
+	expect(render()[1]).toBe(collapsed[1]);
+	expect(render().slice(-2)).toEqual(collapsed.slice(-2));
+	mouse({ y: 11 });
+	expect(reads).toEqual(["job-0", "job-1"]);
+	expect(render().slice(0, 3)).toEqual(collapsed.slice(0, 3));
+	expect(render().at(-1)).toBe(collapsed.at(-1));
+	expect(render().filter((line) => line.includes("output-99"))).toHaveLength(1);
+	mouse({ y: 2 });
+	expect(render()).toEqual(collapsed);
+});
+
+test("inline viewer routes scrollbar drags locally and closes on list pagination", () => {
+	const { render, mouse } = sessionWidgetFixture();
+	mouse({ y: 1 });
+	expect(mouse({ x: 79, y: 9 })?.capture).toBe(true);
+	expect(mouse({ type: "drag", x: 79, y: 0 })?.handled).toBe(true);
+	mouse({ type: "release", x: 79, y: 0 });
+	expect(render().join("\n")).toContain("output-0");
+	mouse({ x: render()[0].indexOf(">"), y: 0 });
+	expect(render()[0]).toContain("2/2");
+	expect(render()).toHaveLength(4);
+	expect(render().join("\n")).not.toContain("output-");
+});
+
 test("session widget viewer respects smaller available heights", () => {
-	const { widget, render } = sessionWidgetFixture(6);
+	const { widget, render, rows } = sessionWidgetFixture(6);
+	widget.update(["RUNNING"], rows.slice(0, 2));
 	widget.open("job-0");
 	expect(render()).toHaveLength(6);
 	expect(render().join("\n")).toContain("output-99");
@@ -752,23 +786,24 @@ test("session widget retains running mode on header toggle and supports direct o
 	const list = widget.render(80);
 	widget.open("job-2");
 	expect(reads).toEqual(["job-2"]);
-	expect(mouse({ x: 50, y: 0 })?.handled).toBe(true);
+	expect(mouse({ x: 50, y: 3 })?.handled).toBe(true);
 	expect(widget.render(80)).toEqual(list);
 	expect(widget.render(80)[0]).toContain("13 running");
 });
 
 test("stock widget host scrolls and retains viewed position after finished-log updates", () => {
 	const { widget, render, mouse, rows, setLog } = sessionWidgetFixture();
+	mouse({ x: render()[0].indexOf("babysits") });
 	widget.open("job-0");
 	expect(render().join("\n")).toContain("output-99");
 	const handled = mouse({ type: "wheel", button: "none", y: 5, wheelDelta: -82 });
 	expect(handled?.handled).toBe(true);
-	const before = render().slice(1, -1).map((line) => line.slice(0, -1));
+	const before = render().slice(2, 10).map((line) => line.slice(0, -1));
 	expect(before.join("\n")).toContain("output-10");
 	setLog(Array.from({ length: 110 }, (_, i) => `output-${i}`).join("\n"));
 	widget.update([], rows.map((row) => ({ ...row, active: false, header: `${row.id} PROCESS FINISHED` })));
-	expect(render()[0]).toContain("FINISHED");
-	expect(render().slice(1, -1).map((line) => line.slice(0, -1))).toEqual(before);
+	expect(render()[1]).toContain("FINISHED");
+	expect(render().slice(2, 10).map((line) => line.slice(0, -1))).toEqual(before);
 	mouse({ type: "wheel", button: "none", y: 5, wheelDelta: 500 });
 	expect(render().join("\n")).toContain("output-109");
 	// Do not let wheel input at the end escape into the chat transcript.
@@ -781,7 +816,7 @@ test("stock widget host closes empty logs via header whitespace", () => {
 	setLog("");
 	widget.open("job-0");
 	expect(render().join("\n")).toContain("no output");
-	expect(mouse({ x: 77, y: 0 })?.handled).toBe(true);
+	expect(mouse({ x: 77, y: 1 })?.handled).toBe(true);
 	expect(render()).toEqual(list);
 });
 

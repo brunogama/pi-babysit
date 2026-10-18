@@ -2600,6 +2600,7 @@ function renderWidgetSessionHeader(
 // How many trailing output lines to show per session in the widget.
 const WIDGET_COLLAPSED_TAIL_LINES = 1;
 const WIDGET_SESSION_PAGE_SIZE = 10;
+const WIDGET_VIEWER_MAX_LINES = 10;
 
 export interface WidgetSessionListState {
 	mode: "running" | "all";
@@ -2755,7 +2756,11 @@ export function createSessionWidget(options: {
 		viewer?.dispose();
 		source = undefined;
 		selectedId = id;
-		viewer = createLogViewer({ ...options, onClose: close });
+		viewer = createLogViewer({
+			...options,
+			getHeight: () => Math.min(WIDGET_VIEWER_MAX_LINES, options.getHeight()),
+			onClose: close,
+		});
 		refreshViewer();
 		options.requestRender();
 	}

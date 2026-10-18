@@ -244,21 +244,18 @@ export function createLogViewer(options: LogViewerOptions) {
 	const heading = {
 		invalidate() {},
 		render(width: number) {
-			const close = truncateToWidth("[Close]", width);
-			const room = Math.max(0, width - visibleWidth(close) - 1);
-			const title = truncateToWidth(sanitize(header).replace(/\n/g, " "), room);
+			const title = truncateToWidth(sanitize(header).replace(/\n/g, " "), width);
 			return [
 				options.getTheme().fg("accent", title) +
 					" ".repeat(
-						Math.max(0, width - visibleWidth(title) - visibleWidth(close)),
-					) +
-					options.getTheme().fg("muted", close),
+						Math.max(0, width - visibleWidth(title)),
+					),
 			];
 		},
 		handleMouse(e: TuiMouseEvent) {
 			if (
 				e.button !== "left" ||
-				e.x < Math.max(0, e.width - 7) ||
+				e.x < 0 ||
 				e.x >= e.width
 			)
 				return;
@@ -272,7 +269,7 @@ export function createLogViewer(options: LogViewerOptions) {
 	const footer: Component = {
 		invalidate() {},
 		render: (width) => [
-			options.getTheme().fg("dim", truncateToWidth(source ? `↑↓ · bytes ${pages[0]?.start ?? 0}–${pages.at(-1)?.end ?? 0}/${source.size} (window) · Esc close` : "↑↓ · Esc close", width)),
+			options.getTheme().fg("dim", truncateToWidth(source ? `↑↓ · bytes ${pages[0]?.start ?? 0}–${pages.at(-1)?.end ?? 0}/${source.size} (window)` : "↑↓", width)),
 		],
 	};
 	let geometry = {
@@ -489,10 +486,6 @@ export function createLogViewer(options: LogViewerOptions) {
 			options.requestRender();
 		},
 		handleKey(data: string): boolean {
-			if (matchesKey(data, Key.escape)) {
-				options.onClose();
-				return true;
-			}
 			if (matchesKey(data, Key.up)) scrollView.scrollBy(-1);
 			else if (matchesKey(data, Key.down)) scrollView.scrollBy(1);
 			else return false;

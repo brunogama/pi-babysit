@@ -694,12 +694,12 @@ test("empty agent and process rows open, including finished sessions without log
 	]);
 });
 
-function sessionWidgetFixture() {
+function sessionWidgetFixture(height = 20) {
 	let log = Array.from({ length: 100 }, (_, i) => `output-${i}`).join("\n");
 	const reads: string[] = [];
 	let renders = 0;
 	const widget = createSessionWidget({
-		getHeight: () => 20,
+		getHeight: () => height,
 		requestRender: () => { renders++; },
 		getTheme: () => ({ fg: (_: string, text: string) => text }) as any,
 		readLog: (id) => { reads.push(id); return { text: log, isAgent: false }; },
@@ -719,7 +719,7 @@ function sessionWidgetFixture() {
 	return { widget, host, render, mouse, rows, reads, setLog: (text: string) => { log = text; }, renders: () => renders };
 }
 
-test("stock widget host opens a tall viewer once and Esc preserves all mode and page", () => {
+test("stock widget host toggles a ten-line viewer and preserves all mode and page", () => {
 	const { widget, render, mouse, reads, renders } = sessionWidgetFixture();
 	const initial = render()[0];
 	mouse({ x: initial.indexOf("babysits") });
@@ -730,20 +730,29 @@ test("stock widget host opens a tall viewer once and Esc preserves all mode and 
 	mouse({ y: 1 });
 	mouse({ type: "click", y: 1 });
 	expect(reads).toEqual(["job-10"]);
-	expect(render()).toHaveLength(20);
+	expect(render()).toHaveLength(10);
 	expect(render()[0]).toContain("job-10");
 	expect(render().join("\n")).toMatch(/[│┃]/);
-	expect(widget.handleKey("\x1b")).toBe(true);
+	expect(widget.handleKey("\x1b")).toBe(false);
+	expect(mouse({ x: 2, y: 0 })?.handled).toBe(true);
+	mouse({ type: "click", x: 2, y: 0 });
 	expect(render()).toEqual(page);
 	expect(renders()).toBeGreaterThan(0);
 });
 
-test("session widget retains running mode on Esc and supports direct open", () => {
-	const { widget, reads } = sessionWidgetFixture();
+test("session widget viewer respects smaller available heights", () => {
+	const { widget, render } = sessionWidgetFixture(6);
+	widget.open("job-0");
+	expect(render()).toHaveLength(6);
+	expect(render().join("\n")).toContain("output-99");
+});
+
+test("session widget retains running mode on header toggle and supports direct open", () => {
+	const { widget, reads, mouse } = sessionWidgetFixture();
 	const list = widget.render(80);
 	widget.open("job-2");
 	expect(reads).toEqual(["job-2"]);
-	expect(widget.handleKey("\x1b")).toBe(true);
+	expect(mouse({ x: 50, y: 0 })?.handled).toBe(true);
 	expect(widget.render(80)).toEqual(list);
 	expect(widget.render(80)[0]).toContain("13 running");
 });
@@ -752,7 +761,7 @@ test("stock widget host scrolls and retains viewed position after finished-log u
 	const { widget, render, mouse, rows, setLog } = sessionWidgetFixture();
 	widget.open("job-0");
 	expect(render().join("\n")).toContain("output-99");
-	const handled = mouse({ type: "wheel", button: "none", y: 5, wheelDelta: -72 });
+	const handled = mouse({ type: "wheel", button: "none", y: 5, wheelDelta: -82 });
 	expect(handled?.handled).toBe(true);
 	const before = render().slice(1, -1).map((line) => line.slice(0, -1));
 	expect(before.join("\n")).toContain("output-10");
@@ -766,7 +775,7 @@ test("stock widget host scrolls and retains viewed position after finished-log u
 	expect(mouse({ type: "wheel", button: "none", y: 5, wheelDelta: 1 })?.handled).toBe(true);
 });
 
-test("stock widget host closes empty logs via the Close button", () => {
+test("stock widget host closes empty logs via header whitespace", () => {
 	const { widget, render, mouse, setLog } = sessionWidgetFixture();
 	const list = render();
 	setLog("");
@@ -794,7 +803,7 @@ test("session widget file source reaches history older than 1 MiB", () => {
 		}
 		expect(widget.render(100).join("\n")).toContain("old-prefix");
 		expect(widget.render(100).join("\n")).not.toContain("omitted");
-		expect(widget.handleKey("\x1b")).toBe(true);
+		expect(widget.handleMouse({ type: "press", button: "left", x: 0, y: 0, width: 100, height: 10 } as TuiMouseEvent)?.handled).toBe(true);
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

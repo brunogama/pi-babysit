@@ -167,9 +167,11 @@ sessions, and click again to return to running-only. Both modes show newest firs
 ten per page; `< 1/4 >` shows the current/total page when needed. Click the
 arrows to page. Rows occupy one line, previewing the description (or the command
 for older processes and task for older agents), with `…` when clipped. Click an
-AGENT or PROCESS row to replace the list with a tall **log viewer in the same widget area**, not an
-overlay or separate screen. `Esc` or the right-hand **Close** button restores
-the list, preserving its mode and page. The viewer uses Pi's `ScrollView` for
+AGENT or PROCESS row to replace the list with a **log viewer in the same widget area**, not an
+overlay or separate screen. The viewer is capped at ten lines including its header
+and footer; all saved history remains available by scrolling. Click anywhere on
+the viewer's header row to restore the list, preserving its mode and page.
+There is no separate Close button or Esc binding. The viewer uses Pi's `ScrollView` for
 scroll position and follow behavior, with a widget-local scrollbar styled using
 Pi's scrollbar theme. Wheel, scrollbar drag/track clicks, and ↑/↓ navigate the
 log without requiring any Pi core changes. Home/End and PageUp/PageDown remain

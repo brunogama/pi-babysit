@@ -134,14 +134,30 @@ describe("stock Container log viewer", () => {
 		).toBe(true);
 		expect(plain(h.render())).not.toContain("█");
 	});
-	test("Close press fires once, click consumed, narrow Close and Esc", () => {
+	test("entire header toggles once per press without a Close button or Esc binding", () => {
+		for (const width of [1, 4, 30]) {
+			for (const x of [0, Math.floor(width / 2), width - 1]) {
+				const { viewer, closed } = setup();
+				viewer.update("job", "output", false);
+				const h = host(viewer, width);
+				expect(plain(h.render())).not.toContain("[Close]");
+				expect(plain(h.render())).not.toContain("Esc");
+				expect(h.mouse("press", x, 0)?.handled).toBe(true);
+				expect(h.mouse("click", x, 0)?.handled).toBe(true);
+				h.mouse("release", x, 0);
+				expect(closed()).toBe(1);
+				expect(viewer.handleKey("\x1b")).toBe(false);
+				expect(closed()).toBe(1);
+			}
+		}
+	});
+	test("body clicks and out-of-bounds header presses do not close the viewer", () => {
 		const { viewer, closed } = setup();
-		const h = host(viewer, 4);
-		expect(h.mouse("press", 3, 0)?.handled).toBe(true);
-		expect(h.mouse("click", 3, 0)?.handled).toBe(true);
-		expect(closed()).toBe(1);
-		expect(viewer.handleKey("\x1b")).toBe(true);
-		expect(closed()).toBe(2);
+		const h = host(viewer);
+		h.mouse("press", 2, 2);
+		h.mouse("press", -1, 0);
+		h.mouse("press", 30, 0);
+		expect(closed()).toBe(0);
 	});
 	test("zero/one body rows and narrow widths stay bounded", () => {
 		const { viewer, resize } = setup();

@@ -928,7 +928,7 @@ test("pi-babysit message renderers follow the tool expansion toggle", () => {
 	const render = (details: Record<string, unknown>) => renderLines(details).join("\n");
 
 	expect(render({ status: "success", command: "npm test" })).toContain(
-		"<muted>babysit_run COMMAND</muted>  <muted>npm test</muted>",
+		"<muted>babysit_run PROCESS</muted>  <muted>npm test</muted>",
 	);
 	expect(render({ status: "success" })).toContain("<success>SUCCESS</success>");
 	expect(render({ status: "success" })).toContain("<bg-toolSuccessBg>");
@@ -938,7 +938,7 @@ test("pi-babysit message renderers follow the tool expansion toggle", () => {
 	expect(render({ status: "failed" })).toContain("<error>FAILED</error>");
 	expect(render({ status: "terminated" })).toContain("<error>TERMINATED</error>");
 	expect(render({ status: "success", count: 3 })).toContain(
-		"<muted>babysit_run COMMAND</muted>  <muted>×3</muted>",
+		"<muted>babysit_run PROCESS</muted>  <muted>×3</muted>",
 	);
 	expect(renderLines({ status: "success" }, false).join("\n")).not.toContain(
 		"process details",
@@ -983,11 +983,11 @@ test("babysit_run renders a status label for quick and background results", () =
 	).render(500).join("\n");
 	const longCommand = `  echo begin\n${"x".repeat(4096)}; printf 'END_MARKER'  `;
 	const longCall = tool.renderCall({ command: longCommand }, theme).render(10_000).join("\n");
-	expect(commandCall).toContain("<muted>babysit_run COMMAND</muted><muted>  bun test</muted>");
+	expect(commandCall).toContain("<muted>babysit_run PROCESS</muted><muted>  bun test</muted>");
 	expect(agentCall).toContain(
 		"<muted>babysit_run AGENT [reviewer]</muted><muted>  Review the diff</muted>",
 	);
-	expect(incompleteCall).toContain("<muted>babysit_run COMMAND</muted>");
+	expect(incompleteCall).toContain("<muted>babysit_run PROCESS</muted>");
 	expect(unsafeCall).toContain("first\\n\\x1B[31msecond");
 	expect(unsafeCall).not.toContain("\x1b");
 	expect(unsafeCall).toContain(`second'${"x".repeat(300)}`);

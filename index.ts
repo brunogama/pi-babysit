@@ -4191,7 +4191,7 @@ export default function (pi: ExtensionAPI) {
 					: d.count && d.count > 1
 						? theme.fg("muted", `×${d.count}`)
 						: "";
-			const header = theme.fg("muted", theme.bold("babysit_run COMMAND")) + (payload ? `  ${payload}` : "");
+			const header = theme.fg("muted", theme.bold("babysit_run PROCESS")) + (payload ? `  ${payload}` : "");
 			const box = new Box(1, 1, (t) => theme.bg("toolSuccessBg", t));
 			box.addChild(new Text(header, 0, 0));
 			box.addChild(new Text(renderStatus(status, theme), 0, 0));
@@ -4859,7 +4859,7 @@ export default function (pi: ExtensionAPI) {
 		// Legacy calls without descriptions still render their original payload safely.
 		renderCall(args, theme) {
 			const isSubagent = args.profile === "subagent";
-			const kind = isSubagent ? "AGENT" : "COMMAND";
+			const kind = isSubagent ? "AGENT" : "PROCESS";
 			const payload = isSubagent ? args.task : args.command;
 			const agent = isSubagent && args.agent ? ` [${escapeCommandForDisplay(args.agent)}]` : "";
 			const title = theme.fg("muted", `${theme.bold(`babysit_run ${kind}`)}${agent}`);

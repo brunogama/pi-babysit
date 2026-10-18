@@ -127,7 +127,7 @@ export function planSubagentSpawn(
 			error:
 				`Nested subagent creation is disabled at depth ${currentDepth}: spawning would reach depth ${childDepth}, ` +
 				`but the inherited maxDepth is ${maxDepth}. Have the top-level parent explicitly opt in with ` +
-				`babysit_run { profile: "subagent", task, maxDepth: ${childDepth} } when creating the first worker.`,
+				`babysit_run { description, profile: "subagent", task, maxDepth: ${childDepth} } when creating the first worker.`,
 		};
 	}
 	return { allowed: true, childDepth, maxDepth };
@@ -160,7 +160,7 @@ export function subagentGuidance(
 	const shellGuidance = directBashAvailable
 		? "Direct bash is available, and babysit_run can supervise longer commands."
 		: babysitRunAvailable
-			? "Direct bash is unavailable; run shell commands with babysit_run { command }."
+			? "Direct bash is unavailable; run shell commands with babysit_run { description, command }."
 			: "No shell execution tool is available in this task's tool allowlist; do not attempt shell commands.";
 	const nestingGuidance = depth >= maxDepth
 		? `You are at the inherited subagent depth limit (${depth}/${maxDepth}); do not attempt to spawn another subagent.`
@@ -521,6 +521,8 @@ interface Meta {
 	remoteId?: string;
 	remoteTerminalState?: string;
 	kind: "process" | "subagent";
+	/** Human-facing purpose. Optional only for metadata written by older versions. */
+	description?: string;
 	// process
 	name?: string;
 	command?: string;
@@ -568,6 +570,11 @@ interface Meta {
 }
 
 const metaDir = () => path.join(ROOT, "meta");
+
+/** Prefer the human-facing purpose while preserving previews for old sessions. */
+export function sessionPreview(meta: Pick<Meta, "description" | "kind" | "task" | "command"> | undefined): string {
+	return meta?.description?.trim() || (meta?.kind === "subagent" ? meta.task : meta?.command) || "";
+}
 const localLogPath = (id: string) => path.join(ROOT, "sessions", id, "output.log");
 const logPath = (id: string) => {
 	const meta = readMeta(id);
@@ -1397,6 +1404,7 @@ export interface ProcessCompletionNotice {
 	status: CompletionStatus;
 	runtime: string;
 	summary: string;
+	description?: string;
 	command: string | undefined;
 	logPath: string;
 	output: string;
@@ -1414,6 +1422,7 @@ interface ProcessCompletionMessage {
 		runtime?: string;
 		logPath?: string;
 		command?: string;
+		description?: string;
 		count: number;
 		totalCount: number;
 		remainingCount: number;
@@ -1424,6 +1433,7 @@ interface ProcessCompletionMessage {
 			status: CompletionStatus;
 			runtime: string;
 			command: string | undefined;
+			description?: string;
 			logPath: string;
 		}>;
 	};
@@ -1465,9 +1475,11 @@ export function buildProcessCompletionMessage(
 		count < totalCount
 			? `\n\n${totalCount - count} completion${totalCount - count === 1 ? "" : "s"} deferred to the next poll.`
 			: "";
+	const noticeSummary = (notice: ProcessCompletionNotice) =>
+		notice.summary + (notice.description ? `\nDescription: ${summarizeNotificationCommand(notice.description)}` : "");
 	const renderCompact = (batch: ProcessCompletionNotice[]) =>
 		header(batch.length) +
-		batch.map((notice) => `${notice.summary}\nLog: ${notice.logPath}`).join("\n\n") +
+		batch.map((notice) => `${noticeSummary(notice)}\nLog: ${notice.logPath}`).join("\n\n") +
 		deferred(batch.length) +
 		footer;
 
@@ -1492,7 +1504,7 @@ export function buildProcessCompletionMessage(
 	}
 
 	const blockBase = (notice: ProcessCompletionNotice) =>
-		`${notice.summary}\nCommand: ${summarizeNotificationCommand(notice.command)}\nLog: ${notice.logPath}`;
+		`${noticeSummary(notice)}\nCommand: ${summarizeNotificationCommand(notice.command)}\nLog: ${notice.logPath}`;
 	const outputs = batch.map((notice) =>
 		notice.output.startsWith("\n\nOutput:") ? AGGREGATE_OUTPUT_OMISSION : notice.output,
 	);
@@ -1533,6 +1545,7 @@ export function buildProcessCompletionMessage(
 		status: notice.status,
 		runtime: notice.runtime,
 		command: notice.command,
+		description: notice.description,
 		logPath: notice.logPath,
 	}));
 	const single = totalCount === 1 ? batch[0] : undefined;
@@ -1548,6 +1561,7 @@ export function buildProcessCompletionMessage(
 			runtime: single?.runtime,
 			logPath: single?.logPath,
 			command: single?.command,
+			description: single?.description,
 			count: batch.length,
 			totalCount,
 			remainingCount: totalCount - batch.length,
@@ -2109,6 +2123,7 @@ async function reserveUniqueSessionId(name: string): Promise<string> {
 }
 
 interface ProcOpts {
+	description: string;
 	name?: string;
 	command: string;
 	cwd?: string;
@@ -2161,7 +2176,7 @@ async function spawnProcess(opts: ProcOpts): Promise<{ id: string } | { error: s
 	const reservedId = remote ? await reserveUniqueSessionId(opts.name ?? "remote-proc") : opts.name ? await reserveUniqueSessionId(opts.name) : undefined;
 	const remoteId = remote ? remoteProcessId(ROOT) : undefined;
 	if (reservedId) bsArgs.push("--id", remoteId ?? reservedId);
-	if (remote && !writeMeta(reservedId!, { kind: "process", host: opts.host, remoteId, name: opts.name ?? reservedId, command: opts.command, notificationGroup: opts.notificationGroup, notified: false, startedAt: Date.now() })) {
+	if (remote && !writeMeta(reservedId!, { kind: "process", host: opts.host, remoteId, name: opts.name ?? reservedId, description: opts.description, command: opts.command, notificationGroup: opts.notificationGroup, notified: false, startedAt: Date.now() })) {
 		reservedSessionIds.delete(reservedId!);
 		return { error: "Cannot persist remote identity; process was not started." };
 	}
@@ -2196,6 +2211,7 @@ async function spawnProcess(opts: ProcOpts): Promise<{ id: string } | { error: s
 	writeMeta(id, {
 		kind: "process",
 		name: opts.name ?? id,
+		description: opts.description,
 		command: opts.command,
 		notificationGroup: opts.notificationGroup,
 		notified: false,
@@ -2251,6 +2267,7 @@ function discardDelivery(delivery: DeliverableMessage): void {
 }
 
 interface SubagentOpts {
+	description: string;
 	name?: string;
 	agent?: AgentConfig;
 	task: string;
@@ -2381,6 +2398,7 @@ async function spawnSubagent(
 	writeMeta(id, {
 		kind: "subagent",
 		name: opts.name ?? id,
+		description: opts.description,
 		task: opts.task,
 		launchCommand,
 		notified: true,
@@ -2470,6 +2488,7 @@ async function spawnSubagent(
 	writeMeta(id, {
 		kind: "subagent",
 		name: opts.name ?? id,
+		description: opts.description,
 		task: opts.task,
 		launchCommand,
 		promptOffset: resp.offset,
@@ -2566,6 +2585,7 @@ export interface WidgetSessionListState {
 
 export interface WidgetSessionDisplay {
 	id: string;
+	description?: string;
 	header: string;
 	tail: string[];
 	viewable: boolean;
@@ -2603,7 +2623,7 @@ export function createWidgetComponent(
 			const pushSession = (session: WidgetSessionDisplay) => {
 				const target = session.viewable ? { type: "session" as const, id: session.id } : undefined;
 				const detail = session.details?.[0];
-				const preview = detail?.startsWith("task: ") ? detail.slice(6) : detail ?? session.tail.at(-1);
+				const preview = session.description ?? (detail?.startsWith("task: ") ? detail.slice(6) : detail ?? session.tail.at(-1));
 				push(`${session.header}${preview ? ` ${preview}` : ""}`, target, "…");
 			};
 
@@ -3540,7 +3560,7 @@ async function waitForExit(
 		kind: "exited",
 		ok,
 		text:
-			`Process ${id}${meta?.command ? ` (${summarizeNotificationCommand(meta.command)})` : ""} ` +
+			`Process ${id}${sessionPreview(meta) ? ` (${summarizeNotificationCommand(sessionPreview(meta))})` : ""} ` +
 			(workerDead
 				? "worker-dead: the babysit supervisor disappeared without an exit status"
 				: ok ? "completed successfully" : `exited with code ${st.exit_code ?? "?"}`) +
@@ -3852,6 +3872,7 @@ export default function (pi: ExtensionAPI) {
 				runtime,
 				summary,
 				command: meta.command,
+				description: meta.description,
 				logPath: logPath(session.id),
 				output,
 			});
@@ -3873,7 +3894,7 @@ export default function (pi: ExtensionAPI) {
 			if (!latest || latest.transportError || latest.state === "running") return [];
 			if (!isNotificationGroupReady(current, finalSessions, readMeta)) return [];
 			metadataById.set(notice.id, current);
-			return [{ ...notice, command: current.command }];
+			return [{ ...notice, command: current.command, description: current.description }];
 		});
 		// Output collection above yields to the event loop. Re-check idleness so a
 		// newly-started agent turn cannot receive a duplicate completion mid-turn.
@@ -3897,7 +3918,7 @@ export default function (pi: ExtensionAPI) {
 	): Promise<void> {
 		if (shouldDeferCompletionNotification(ctx.isIdle())) return;
 		const sessions = snapshot ?? (await listSessions()).sessions;
-		const ready: Array<{ id: string; offset: number; state: string; summary: string }> = [];
+		const ready: Array<{ id: string; offset: number; state: string; summary: string; description?: string }> = [];
 		for (const session of sessions) {
 			const meta = readMeta(session.id);
 			if (!shouldDeliverSubagentCompletion(meta)) continue;
@@ -3920,7 +3941,7 @@ export default function (pi: ExtensionAPI) {
 			const summary = progress.done
 				? `task settled; ${progress.turns} turns, ${progress.toolCallCount} tools, $${progress.cost.toFixed(4)}`
 				: `worker ${session.state} with exit code ${session.exit_code ?? "?"}; partial usage $${progress.cost.toFixed(4)}`;
-			ready.push({ id: session.id, offset, state: session.state, summary });
+			ready.push({ id: session.id, offset, state: session.state, summary, description: meta.description });
 		}
 		if (ready.length === 0 || shouldDeferCompletionNotification(ctx.isIdle())) return;
 
@@ -3934,10 +3955,10 @@ export default function (pi: ExtensionAPI) {
 				customType: "pi-babysit-subagent-ready",
 				content:
 					`${deliverable.length === 1 ? "A background subagent is" : `${deliverable.length} background subagents are`} ready to collect:\n` +
-					deliverable.map(({ id, summary }) => `- ${id}: ${summary}`).join("\n") +
+					deliverable.map(({ id, summary, description }) => `- ${id}${description ? ` (${summarizeNotificationCommand(description)})` : ""}: ${summary}`).join("\n") +
 					"\nCall babysit_wait now to retrieve the answer and charge nested usage before finishing the parent task.",
 				display: true,
-				details: { subagents: deliverable.map(({ id, state }) => ({ id, state })) },
+				details: { subagents: deliverable.map(({ id, state, description }) => ({ id, state, description })) },
 			},
 			{ triggerTurn: true, deliverAs: "steer" },
 		);
@@ -3992,12 +4013,16 @@ export default function (pi: ExtensionAPI) {
 			const id = session.id;
 			const meta = readMeta(id);
 			const isSubagent = meta?.kind === "subagent";
+			const description = meta?.description?.trim()
+				? theme.fg("warning", theme.bold(escapeCommandForDisplay(meta.description.trim())))
+				: undefined;
 			const details = isSubagent
 				? [
-					...(meta?.task ? [`task: ${escapeCommandForDisplay(meta.task)}`] : []),
-					...(meta?.launchCommand ? [theme.bold(escapeCommandForDisplay(readableLaunchCommand(meta.launchCommand)))] : []),
+					...(meta?.task ? [theme.fg("muted", `task: ${escapeCommandForDisplay(meta.task)}`)] : []),
+					...(meta?.launchCommand ? [theme.fg("muted", escapeCommandForDisplay(readableLaunchCommand(meta.launchCommand)))] : []),
 				]
-				: meta?.command ? [theme.bold(escapeCommandForDisplay(meta.command))] : [];
+				: meta?.command ? [theme.fg("muted", escapeCommandForDisplay(meta.command))] : [];
+			if (description) details.unshift(description);
 			if (meta?.host) details.unshift(`host: ${meta.host}${session.transportError ? " (status unknown)" : ""} · ${attachCmd(id)}`);
 			if (session.state === "running") {
 				const state: WidgetSessionState = isSubagent && progressById.get(id)?.done ? "idle" : "running";
@@ -4005,6 +4030,7 @@ export default function (pi: ExtensionAPI) {
 					id,
 					header: renderWidgetSessionHeader(id, isSubagent ? "agent" : "process", state, elapsedOf(id), theme) + (session.transportError ? " · status unknown" : ""),
 					tail: activeTails.get(id) ?? [],
+					description,
 					viewable: true,
 					active: true,
 					details,
@@ -4020,6 +4046,7 @@ export default function (pi: ExtensionAPI) {
 					theme,
 				),
 				details,
+				description,
 				// Only read/parse visible sessions on demand.
 				get tail() {
 					try {
@@ -4115,25 +4142,27 @@ export default function (pi: ExtensionAPI) {
 				success?: boolean;
 				exitCode?: number | null;
 				command?: string;
+				description?: string;
 				count?: number;
 			};
 			const status =
 				d.status ??
 				(d.success ? "success" : d.exitCode == null ? "terminated" : "failed");
-			const payload = d.command
-				? `  ${summarizeNotificationCommand(d.command)}`
-				: d.count && d.count > 1
-					? `  ×${d.count}`
-					: "";
-			const header = theme.fg(
-				"warning",
-				theme.bold(`babysit_run COMMAND${payload}`),
-			);
+			const payload = d.description?.trim()
+				? theme.fg("warning", theme.bold(summarizeNotificationCommand(d.description)))
+				: d.command
+					? theme.fg("muted", summarizeNotificationCommand(d.command))
+					: d.count && d.count > 1
+						? theme.fg("muted", `×${d.count}`)
+						: "";
+			const header = theme.fg("muted", theme.bold("babysit_run COMMAND")) + (payload ? `  ${payload}` : "");
 			const box = new Box(1, 1, (t) => theme.bg("toolSuccessBg", t));
 			box.addChild(new Text(header, 0, 0));
 			box.addChild(new Text(renderStatus(status, theme), 0, 0));
 			if (expanded && content) {
-				box.addChild(new Text(theme.fg("toolOutput", content), 0, 0));
+				box.addChild(new Text(content.split("\n").map((line) =>
+					theme.fg(line.startsWith("Command: ") ? "muted" : "toolOutput", line),
+				).join("\n"), 0, 0));
 			}
 			return box;
 		},
@@ -4281,7 +4310,7 @@ export default function (pi: ExtensionAPI) {
 				block: true,
 				reason:
 					`This bash command tries to run in the background. Use babysit_run instead, e.g. ` +
-					`babysit_run({ name: "background-process", command: ${JSON.stringify(command.replace(/\s*&\s*$/, ""))} })`,
+					`babysit_run({ description: "Describe this background process's purpose", name: "background-process", command: ${JSON.stringify(command.replace(/\s*&\s*$/, ""))} })`,
 			};
 		}
 		if (isAllowedDirectBash(command)) return;
@@ -4290,7 +4319,7 @@ export default function (pi: ExtensionAPI) {
 			reason:
 				"Use babysit_run for shell commands so output is supervised and captured outside model context. " +
 				"Inspect an existing session log with babysit_check { id, lines, pattern? }. " +
-				`Retry as babysit_run({ command: ${JSON.stringify(command)} }).`,
+				`Retry with a short purpose description as babysit_run({ description: "Explain the purpose of this command", command: ${JSON.stringify(command)} }).`,
 		};
 	});
 
@@ -4300,11 +4329,13 @@ export default function (pi: ExtensionAPI) {
 		label: "Babysit: run",
 		description:
 			"Run a supervised shell command, or start a reusable pi subagent with `profile: \"subagent\"`. " +
+			"Always provide a short human-readable `description` of what this run does and why. " +
 			"Use `foreground` for results needed now; otherwise long commands notify on exit. Full logs stay on disk. " +
 			"`returnPattern`/`returnLines` bound foreground output. Sessions support check, wait, send, and kill.",
 		promptSnippet: "Run supervised commands or bounded pi subagents with context-safe logs",
 		promptGuidelines: [
 			"Use babysit_run for shell commands and give meaningful sessions a stable name; bundle tiny related read-only observations into one command.",
+			"Every babysit_run requires a short description explaining its purpose for the user, for both commands and subagents. Describe the actual work, not a generic 'run command' or 'start agent'.",
 			"Use babysit_run foreground mode for one process or subagent whose result is needed now; never issue sibling foreground runs in parallel. For parallel process checks, start background runs with continueAfterStart and collect them with one multi-session babysit_wait.",
 			"Use returnPattern/returnLines for noisy commands. During edit/fix loops run targeted checks first and one full validation suite at the end instead of repeating every full gate.",
 			"After a background process starts, stop the turn for its automatic notification; never poll or sleep. Use continueAfterStart only for specific non-polling process work.",
@@ -4318,6 +4349,11 @@ export default function (pi: ExtensionAPI) {
 			return prepareBabysitRunArguments(args) as never;
 		},
 		parameters: Type.Object({
+			description: Type.String({
+				minLength: 1,
+				pattern: "\\S",
+				description: "Required short human-readable purpose for this command or subagent. Explain what it does and why; shown prominently to the user.",
+			}),
 			host: Type.Optional(Type.String({ description: "Process SSH destination/config alias (default local). Remote subagents are unsupported." })),
 			cwd: Type.Optional(Type.String({ description: "Process working directory. Remote default is login home; never inferred from local cwd." })),
 			command: Type.Optional(
@@ -4448,6 +4484,10 @@ export default function (pi: ExtensionAPI) {
 
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
+			if (typeof params.description !== "string" || !params.description.trim()) {
+				throw new Error("`description` is required and must be a non-blank string for both commands and subagents.");
+			}
+			const description = params.description.trim();
 			await requireBabysit();
 			const isSubagent = params.profile === "subagent";
 			validateProcessHost(params.host);
@@ -4555,6 +4595,7 @@ export default function (pi: ExtensionAPI) {
 						? { pattern: params.returnPattern, lines: params.returnLines, maxBytes: params.maxBytes }
 						: undefined;
 				const spawnOpts: ProcOpts = {
+					description,
 					name: params.name,
 					command: params.command as string,
 					host: params.host,
@@ -4605,6 +4646,7 @@ export default function (pi: ExtensionAPI) {
 							kind: "process",
 							command: params.command,
 							logPath: logPath(res.id),
+							description,
 							retried,
 							status: outcomeStatus(outcome),
 						},
@@ -4641,6 +4683,7 @@ export default function (pi: ExtensionAPI) {
 							kind: "process",
 							command: params.command,
 							logPath: logPath(res.id),
+							description,
 							retried,
 							status: outcomeStatus(outcome),
 						},
@@ -4657,7 +4700,7 @@ export default function (pi: ExtensionAPI) {
 							type: "text",
 							text:
 								`${retried ? "Retried once after external worker death.\n" : ""}` +
-								`Process started (id: ${res.id}). ${NOTIFY_MARKER}\nLog: ${logPath(res.id)}\n${nextStep}\n` +
+								`Process started (id: ${res.id}). ${NOTIFY_MARKER}\nDescription: ${escapeCommandForDisplay(description)}\nLog: ${logPath(res.id)}\n${nextStep}\n` +
 								`Inspect: babysit_check { id: "${res.id}" } (screen: true for TUIs) · ` +
 								`Wait: babysit_wait { id: "${res.id}" } · Kill: babysit_kill { id: "${res.id}" }\n` +
 								`Human can watch/take over: /babysit`,
@@ -4667,6 +4710,7 @@ export default function (pi: ExtensionAPI) {
 						id: res.id,
 						kind: "process",
 						command: params.command,
+						description,
 						logPath: logPath(res.id),
 						retried,
 						status: "started" satisfies DisplayStatus,
@@ -4702,6 +4746,7 @@ export default function (pi: ExtensionAPI) {
 			// The branch above guarantees a successful plan in subagent mode.
 			const subagentNesting = nesting as Extract<SubagentSpawnPlan, { allowed: true }>;
 			const res = await spawnSubagent({
+				description,
 				name: params.name,
 				agent,
 				task: params.task as string,
@@ -4750,6 +4795,7 @@ export default function (pi: ExtensionAPI) {
 						agent: agent?.name,
 						model: res.model,
 						task: params.task,
+						description,
 						depth: subagentNesting.childDepth,
 						maxDepth: subagentNesting.maxDepth,
 						status: outcomeStatus(outcome),
@@ -4762,7 +4808,7 @@ export default function (pi: ExtensionAPI) {
 						type: "text",
 						text:
 							`Subagent started (id: ${res.id})${agent ? ` [agent: ${agent.name}]` : ""}${res.model ? ` [model: ${res.model}]` : ""} [depth: ${subagentNesting.childDepth}/${subagentNesting.maxDepth}].\n` +
-							`Task accepted — running in the background. You MUST collect it with babysit_wait before finishing the parent task; use foreground: true next time when no independent work is available.\n` +
+							`Description: ${escapeCommandForDisplay(description)}\nTask accepted — running in the background. You MUST collect it with babysit_wait before finishing the parent task; use foreground: true next time when no independent work is available.\n` +
 							`Progress: babysit_check { id: "${res.id}" } (only when inspection is needed)\n` +
 							`Collect:  babysit_wait  { id: "${res.id}" }\n` +
 							`Human can watch/steer: /babysit (pick ${res.id})`,
@@ -4775,25 +4821,30 @@ export default function (pi: ExtensionAPI) {
 					agent: agent?.name,
 					model: res.model,
 					task: params.task,
+					description,
 					depth: subagentNesting.childDepth,
 					maxDepth: subagentNesting.maxDepth,
 					status: "started" satisfies DisplayStatus,
 				},
 			};
 		},
-		// Make the execution kind and payload identifiable before the result arrives.
-		// Use semantic theme colors rather than the fallback gray tool-call text.
-		renderCall(args, theme) {
+		// The human-readable purpose is primary; the executable payload is secondary.
+		// Legacy calls without descriptions still render their original payload safely.
+		renderCall(args, theme, context) {
 			const isSubagent = args.profile === "subagent";
 			const kind = isSubagent ? "AGENT" : "COMMAND";
 			const payload = isSubagent ? args.task : args.command;
-			const agent = isSubagent && args.agent ? ` [${args.agent}]` : "";
-			const title = theme.bold(`babysit_run ${kind}`);
-			const detail =
-				typeof payload === "string" && payload.length > 0
-					? `  ${escapeCommandForDisplay(payload)}`
-					: "";
-			return new Text(theme.fg("warning", `${title}${agent}${detail}`), 0, 0);
+			const agent = isSubagent && args.agent ? ` [${escapeCommandForDisplay(args.agent)}]` : "";
+			const title = theme.fg("muted", `${theme.bold(`babysit_run ${kind}`)}${agent}`);
+			const description = typeof args.description === "string" ? args.description.trim() : "";
+			const raw = typeof payload === "string" ? escapeCommandForDisplay(payload) : "";
+			const heading = description
+				? `${title}  ${theme.fg("warning", theme.bold(escapeCommandForDisplay(description)))}`
+				: `${title}${raw ? theme.fg("muted", `  ${raw}`) : ""}`;
+			const detail = description && raw && context?.expanded
+				? `\n${theme.fg("muted", `${isSubagent ? "task" : "command"}: ${raw}`)}`
+				: "";
+			return new Text(heading + detail, 0, 0);
 		},
 		renderResult(result, { expanded, isPartial }, theme, context) {
 			const details = (result.details ?? {}) as {
@@ -4932,7 +4983,7 @@ export default function (pi: ExtensionAPI) {
 						kind === "subagent" && meta?.depth != null
 							? ` depth=${meta.depth}/${meta.maxDepth ?? "?"}`
 							: "";
-					const what = (kind === "subagent" ? meta?.task : meta?.command) ?? "";
+					const what = escapeCommandForDisplay(sessionPreview(meta));
 					const preview = what.length > 60 ? `${what.slice(0, 57)}…` : what;
 					return `${s.id}  [${kind}${s.host ? ` host=${s.host}` : ""}] ${s.transportError ? "unknown" : s.state}${ec}${depth}${flag}${preview ? `  — ${preview}` : ""}`;
 				});
@@ -5000,6 +5051,7 @@ export default function (pi: ExtensionAPI) {
 					if (el) header += ` elapsed=${el}`;
 				}
 				if (st.exit_code != null) header += ` exit_code=${st.exit_code}`;
+				if (meta?.description) header += `\ndescription: ${escapeCommandForDisplay(meta.description)}`;
 				if (meta?.command) header += `\ncommand: ${summarizeNotificationCommand(meta.command)}`;
 				header += `\nlog: ${logPath(params.id)}`;
 				if (st.note) header += ` ⚑ ${st.note}`;
@@ -5045,6 +5097,7 @@ export default function (pi: ExtensionAPI) {
 			if (prog.tokens != null) header += ` ctx=${prog.tokens}`;
 			if (prog.modelCalls > 0) header += ` usage=${prog.usageTokens} $${prog.cost.toFixed(4)}`;
 			if (st.note) header += ` ⚑ ${st.note}`;
+			if (meta.description) header += `\ndescription: ${escapeCommandForDisplay(meta.description)}`;
 			parts.push(header);
 
 			if (prog.errorMsg) parts.push(`⚠ error: ${clip(prog.errorMsg, ANSWER_MAX_BYTES)}`);
@@ -5593,9 +5646,7 @@ export default function (pi: ExtensionAPI) {
 
 			const whatOf = (s: BsSession): string => {
 				const meta = readMeta(s.id);
-				return ((meta?.kind === "subagent" ? meta.task : meta?.command) ?? "")
-					.replace(/\s+/g, " ")
-					.trim();
+				return escapeCommandForDisplay(sessionPreview(meta).replace(/\s+/g, " ").trim());
 			};
 
 			// Labels must be unique for index mapping; the id makes them unique.

@@ -65,6 +65,7 @@ import extension, {
 	transitionWaitReservation,
 	usageFromProgress,
 	validateKillResponse,
+	sessionPreview,
 	widgetSessionGroups,
 	widgetSessionHeader,
 	widgetTail,
@@ -127,16 +128,117 @@ async function run(command: string, extras: Record<string, unknown> = {}) {
 	const name = `log-test-${Date.now()}-${sequence++}`;
 	return tools.get("babysit_run").execute(
 		name,
-		{ name, command, pty: false, ...extras },
+		{ name, command, description: "Run test command", pty: false, ...extras },
 		undefined,
 		undefined,
 		ctx,
 	) as Promise<{
 		content: Array<{ text: string }>;
-		details: { id: string; logPath: string; retried?: boolean };
+		details: { id: string; logPath: string; description?: string; retried?: boolean };
 		isError?: boolean;
 	}>;
 }
+
+test("babysit_run description schema rejects missing and blank labels", () => {
+	const schema = tools.get("babysit_run").parameters;
+	expect(schema.required).toContain("description");
+	expect(schema.properties.description.type).toBe("string");
+	expect(schema.properties.description.minLength).toBe(1);
+	const pattern = new RegExp(schema.properties.description.pattern);
+	for (const blank of ["", " ", "\t\n"]) expect(pattern.test(blank)).toBe(false);
+	expect(pattern.test("Run tests")).toBe(true);
+});
+
+test("babysit_run rejects invalid descriptions before process or subagent side effects", async () => {
+	const dir = mkdtempSync(path.join(os.tmpdir(), "babysit-description-"));
+	try {
+		for (const profile of [undefined, "subagent"]) {
+			for (const description of [undefined, null, 42, {}, "", " \t\n "]) {
+				const args: Record<string, unknown> = profile
+					? { profile, task: "Do not start a model" }
+					: { command: `touch '${path.join(dir, "spawned")}'` };
+				if (description !== undefined) args.description = description;
+				await expect(tools.get("babysit_run").execute("invalid-description", args, undefined, undefined, ctx)).rejects.toThrow(/description/i);
+			}
+		}
+		expect(readdirSync(dir)).toEqual([]);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("babysit_run trims and persists local descriptions", async () => {
+	const result = await run("printf description-ok", { description: "  Verify local persistence \n", foreground: true });
+	expect(result.isError).not.toBe(true);
+	expect(result.details.description).toBe("Verify local persistence");
+	const root = path.dirname(path.dirname(path.dirname(result.details.logPath)));
+	const meta = JSON.parse(readFileSync(path.join(root, "meta", `${result.details.id}.json`), "utf8"));
+	expect(meta.description).toBe("Verify local persistence");
+});
+
+test("babysit_run description rendering separates labels from raw payloads", () => {
+	const tool = tools.get("babysit_run");
+	const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bold: (text: string) => `<bold>${text}</bold>` };
+	for (const payload of [{ command: "echo RAW_COMMAND" }, { profile: "subagent", task: "RAW_TASK" }]) {
+		const args = { ...payload, description: "Run checks" };
+		const collapsed = tool.renderCall(args, theme, { expanded: false }).render(1000).join("\n");
+		expect(collapsed).toContain("<muted><bold>babysit_run");
+		expect(collapsed).toContain("<warning>");
+		expect(collapsed).toContain("<bold>Run checks</bold>");
+		expect(collapsed).not.toMatch(/RAW_COMMAND|RAW_TASK/);
+		const expanded = tool.renderCall(args, theme, { expanded: true }).render(1000).join("\n");
+		expect(expanded).toContain("<muted>");
+		expect(expanded).toContain("command" in payload ? payload.command! : payload.task!);
+		expect(expanded.split("\n").length).toBeGreaterThan(1);
+	}
+	const unsafe = tool.renderCall({ command: "echo raw", description: "first\n\x1b[31msecond" }, theme).render(1000).join("\n");
+	expect(unsafe).toContain("first\\n\\x1B[31msecond");
+	expect(unsafe).not.toContain("\x1b");
+});
+
+test("completion descriptions survive single and batched messages", () => {
+	const first = completionNotice("described", { description: "Verify build" });
+	const single = buildProcessCompletionMessage([first]);
+	expect(single.content).toContain("Verify build");
+	expect(single.details.description).toBe("Verify build");
+	const batch = buildProcessCompletionMessage([first, completionNotice("legacy")]);
+	expect(batch.content).toContain("Verify build");
+	expect(batch.details.processes[0].description).toBe("Verify build");
+	const theme = { fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bg: (_: string, text: string) => text, bold: (text: string) => `<bold>${text}</bold>` };
+	const rendered = renderers.get("pi-babysit-process-end")(single, { expanded: false }, theme).render(1000).join("\n");
+	expect(rendered).toContain("<warning>");
+	expect(rendered).toContain("Verify build");
+	expect(rendered).not.toContain("echo described");
+});
+
+test("session previews prefer trimmed descriptions with legacy payload fallbacks", () => {
+	expect(sessionPreview({ kind: "process", description: "  Run checks  ", command: "echo RAW" })).toBe("Run checks");
+	expect(sessionPreview({ kind: "subagent", description: "Review changes", task: "RAW_TASK" })).toBe("Review changes");
+	expect(sessionPreview({ kind: "process", command: "echo legacy" })).toBe("echo legacy");
+	expect(sessionPreview({ kind: "subagent", task: "Legacy task" })).toBe("Legacy task");
+	expect(sessionPreview({ kind: "process", description: " \t", command: "echo fallback" })).toBe("echo fallback");
+	expect(sessionPreview(undefined)).toBe("");
+});
+
+test("widget description overrides host and raw details while full viewer retains raw payload", () => {
+	const widget = createSessionWidget({
+		getHeight: () => 20,
+		requestRender() {},
+		getTheme: () => ({ fg: (_: string, text: string) => text }) as any,
+		readLog: () => ({ text: "process output", isAgent: false }),
+	});
+	widget.update([], [{
+		id: "described", header: "described PROCESS RUNNING", active: true, viewable: true, tail: [],
+		description: "\x1b[33mCheck remote build\x1b[0m",
+		details: ["host: alpha  echo RAW_COMMAND", "Check remote build"],
+	}]);
+	const list = widget.render(120).join("\n");
+	expect(list).toContain("Check remote build");
+	expect(list).toContain("\x1b[33m");
+	expect(list).not.toContain("RAW_COMMAND");
+	widget.open("described");
+	const viewer = widget.render(120).join("\n");
+	expect(viewer).toContain("RAW_COMMAND");
+	expect(viewer).toContain("alpha");
+});
 
 test("widget labels make session kind and state explicit without visual clutter", () => {
 	expect(widgetSummaryText(2, 0, 8)).toBe("RUNNING 2 processes IDLE 8 agents");
@@ -792,7 +894,7 @@ test("pi-babysit message renderers follow the tool expansion toggle", () => {
 	const render = (details: Record<string, unknown>) => renderLines(details).join("\n");
 
 	expect(render({ status: "success", command: "npm test" })).toContain(
-		"<warning>babysit_run COMMAND  npm test</warning>",
+		"<muted>babysit_run COMMAND</muted>  <muted>npm test</muted>",
 	);
 	expect(render({ status: "success" })).toContain("<success>SUCCESS</success>");
 	expect(render({ status: "success" })).toContain("<bg-toolSuccessBg>");
@@ -802,7 +904,7 @@ test("pi-babysit message renderers follow the tool expansion toggle", () => {
 	expect(render({ status: "failed" })).toContain("<error>FAILED</error>");
 	expect(render({ status: "terminated" })).toContain("<error>TERMINATED</error>");
 	expect(render({ status: "success", count: 3 })).toContain(
-		"<warning>babysit_run COMMAND  ×3</warning>",
+		"<muted>babysit_run COMMAND</muted>  <muted>×3</muted>",
 	);
 	expect(renderLines({ status: "success" }, false).join("\n")).not.toContain(
 		"process details",
@@ -847,16 +949,16 @@ test("babysit_run renders a status label for quick and background results", () =
 	).render(500).join("\n");
 	const longCommand = `  echo begin\n${"x".repeat(4096)}; printf 'END_MARKER'  `;
 	const longCall = tool.renderCall({ command: longCommand }, theme).render(10_000).join("\n");
-	expect(commandCall).toContain("<warning>babysit_run COMMAND  bun test</warning>");
+	expect(commandCall).toContain("<muted>babysit_run COMMAND</muted><muted>  bun test</muted>");
 	expect(agentCall).toContain(
-		"<warning>babysit_run AGENT [reviewer]  Review the diff</warning>",
+		"<muted>babysit_run AGENT [reviewer]</muted><muted>  Review the diff</muted>",
 	);
-	expect(incompleteCall).toContain("<warning>babysit_run COMMAND</warning>");
+	expect(incompleteCall).toContain("<muted>babysit_run COMMAND</muted>");
 	expect(unsafeCall).toContain("first\\n\\x1B[31msecond");
 	expect(unsafeCall).not.toContain("\x1b");
 	expect(unsafeCall).toContain(`second'${"x".repeat(300)}`);
 	expect(unsafeCall).not.toContain("…");
-	expect(longCall).toContain(`  echo begin\\n${"x".repeat(4096)}; printf 'END_MARKER'  </warning>`);
+	expect(longCall).toContain(`  echo begin\\n${"x".repeat(4096)}; printf 'END_MARKER'  </muted>`);
 	expect(longCall).not.toContain("…");
 	expect(render("success")).toContain("<success>SUCCESS</success>");
 	expect(render("success")).not.toContain("babysit_run SUCCESS");
@@ -1767,7 +1869,7 @@ test("subagent depth limit blocks profile mode but leaves process mode available
 	try {
 		const denied = await tools.get("babysit_run").execute(
 			"test",
-			{ profile: "subagent", task: "must not start" },
+			{ description: "Check depth limit", profile: "subagent", task: "must not start" },
 			undefined,
 			undefined,
 			ctx,
@@ -1827,7 +1929,7 @@ test("process lifecycle defaults follow ownership and explicit overrides win", (
 test("mode-specific notification and budget parameters reject misuse", async () => {
 	const processBudget = await tools.get("babysit_run").execute(
 		"process-budget",
-		{ command: "true", maxCost: 1 },
+		{ description: "Check budget validation", command: "true", maxCost: 1 },
 		undefined,
 		undefined,
 		ctx,
@@ -1837,7 +1939,7 @@ test("mode-specific notification and budget parameters reject misuse", async () 
 
 	const subagentGroup = await tools.get("babysit_run").execute(
 		"subagent-group",
-		{ profile: "subagent", task: "do nothing", notificationGroup: "checks" },
+		{ description: "Check notification validation", profile: "subagent", task: "do nothing", notificationGroup: "checks" },
 		undefined,
 		undefined,
 		ctx,
@@ -1847,7 +1949,7 @@ test("mode-specific notification and budget parameters reject misuse", async () 
 
 	const subagentLifecycle = await tools.get("babysit_run").execute(
 		"subagent-lifecycle",
-		{ profile: "subagent", task: "do nothing", lifecycle: "attached" },
+		{ description: "Check lifecycle validation", profile: "subagent", task: "do nothing", lifecycle: "attached" },
 		undefined,
 		undefined,
 		ctx,
@@ -1857,7 +1959,7 @@ test("mode-specific notification and budget parameters reject misuse", async () 
 
 	const backgroundAttached = await tools.get("babysit_run").execute(
 		"background-attached",
-		{ command: "sleep 1", lifecycle: "attached" },
+		{ description: "Check attached background validation", command: "sleep 1", lifecycle: "attached" },
 		undefined,
 		undefined,
 		interactiveCtx,
@@ -1887,7 +1989,7 @@ test("mode-specific notification and budget parameters reject misuse", async () 
 
 	const conflictingProcessModes = await tools.get("babysit_run").execute(
 		"foreground-continue",
-		{ command: "true", foreground: true, continueAfterStart: true },
+		{ description: "Check conflicting modes", command: "true", foreground: true, continueAfterStart: true },
 		undefined,
 		undefined,
 		ctx,
@@ -1906,7 +2008,7 @@ test("long subagent messages fail before spawn when the read tool is unavailable
 	try {
 		const result = await tools.get("babysit_run").execute(
 			"long-task-no-read",
-			{ profile: "subagent", task: "x".repeat(601), tools: ["grep"] },
+			{ description: "Check long task validation", profile: "subagent", task: "x".repeat(601), tools: ["grep"] },
 			undefined,
 			undefined,
 			ctx,
@@ -2439,6 +2541,7 @@ test("attached foreground abort terminates while detached foreground abort prese
 			return await tools.get("babysit_run").execute(
 				`abort-${label}-${Date.now()}-${sequence++}`,
 				{
+					description: "Check abort lifecycle",
 					name: `abort-${label}-${Date.now()}-${sequence++}`,
 					command: "sleep 60",
 					pty: false,
@@ -2501,7 +2604,7 @@ test("babysit_kill returns success only after terminal state is persisted", asyn
 	const binary = process.env.PI_BABYSIT_CLI ?? "babysit";
 	const started = await tools.get("babysit_run").execute(
 		"start-for-kill-test",
-		{ name: `kill-test-${Date.now()}-${sequence++}`, command: "sleep 60", pty: false, continueAfterStart: true },
+		{ description: "Check kill persistence", name: `kill-test-${Date.now()}-${sequence++}`, command: "sleep 60", pty: false, continueAfterStart: true },
 		undefined,
 		undefined,
 		interactiveCtx,
@@ -2634,6 +2737,7 @@ test("foreground process mode returns a long command result in one tool call", a
 		name,
 		{
 			name,
+			description: "Check foreground completion",
 			command: "sleep 2.2; printf 'foreground-done\\n'",
 			pty: false,
 			foreground: true,
@@ -2660,6 +2764,7 @@ test("parallel foreground processes never report a running child as terminated",
 				`${prefix}-${index}`,
 				{
 					name: `${prefix}-${index}`,
+					description: "Check parallel foreground completion",
 					command: `sleep 0.${index + 2}; printf 'parallel-${index}-done\\n'`,
 					pty: false,
 					foreground: true,
@@ -2687,6 +2792,7 @@ test("foreground mode filters noisy output without a second check turn", async (
 		name,
 		{
 			name,
+			description: "Check output filtering",
 			command: "python3 -c \"print('noise\\n' * 5000); print('IMPORTANT final')\"",
 			pty: false,
 			foreground: true,
@@ -2706,7 +2812,7 @@ test("foreground mode filters noisy output without a second check turn", async (
 
 	const invalid = await tools.get("babysit_run").execute(
 		"invalid-filter",
-		{ name: "invalid-filter", command: "printf never", foreground: true, returnPattern: "[" },
+		{ description: "Check invalid output filter", name: "invalid-filter", command: "printf never", foreground: true, returnPattern: "[" },
 		undefined,
 		undefined,
 		interactiveCtx,
@@ -2721,6 +2827,7 @@ test("foreground mode lets the supervisor own the absolute timeout boundary", as
 		name,
 		{
 			name,
+			description: "Check foreground timeout",
 			command: "sleep 10",
 			pty: false,
 			foreground: true,

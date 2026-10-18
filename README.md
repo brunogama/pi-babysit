@@ -32,8 +32,8 @@ reachable from anywhere (`~/.pi-babysit/<pi-session-id>/`). Two kinds:
 
 | kind | started by | completion | on completion |
 | ---- | ---------- | ---------- | ------------- |
-| **process** | `babysit_run { command }` | process **exit** | automatic notification message (`triggerTurn`), batched for all exits observed in the same poll — the agent may end its turn after starting and is resumed on exit, same contract as the old `process` tool |
-| **subagent** | `babysit_run { profile: "subagent", task }` | `agent_settled` in the RPC event stream (worker remains reusable during its idle grace) | `foreground: true` returns the answer and nested usage in the same tool call; background workers must be collected with `babysit_wait` before the parent finishes, and remain reusable until self-reap |
+| **process** | `babysit_run { description, command }` | process **exit** | automatic notification message (`triggerTurn`), batched for all exits observed in the same poll — the agent may end its turn after starting and is resumed on exit, same contract as the old `process` tool |
+| **subagent** | `babysit_run { description, profile: "subagent", task }` | `agent_settled` in the RPC event stream (worker remains reusable during its idle grace) | `foreground: true` returns the answer and nested usage in the same tool call; background workers must be collected with `babysit_wait` before the parent finishes, and remain reusable until self-reap |
 
 The **profile is a tool parameter, not a separate tool set**: domain knowledge
 (RPC bookkeeping, per-task byte offsets, parked-turn detection, PTY-safe
@@ -44,8 +44,8 @@ Subagent recursion is **disabled by default**: a top-level pi may create workers
 (depth 1), but those workers cannot create more workers. A top-level caller can
 explicitly opt in for a specific tree with `maxDepth: 2` (or higher) when it
 creates the first worker. Descendants inherit that ceiling and cannot raise it.
-Normal `babysit_run { command }` process execution remains available at every
-depth.
+Normal `babysit_run { description, command }` process execution remains available
+at every depth.
 
 Because sessions are real PTYs, the agent can also **drive interactive
 programs** (installers, wizards, REPLs): type with `babysit_send`
@@ -56,7 +56,7 @@ programs** (installers, wizards, REPLs): type with `babysit_send`
 
 | Tool | What it does |
 | ---- | ------------ |
-| `babysit_run` | Run any command (`command`, optional `name`/`pty`/`timeout`/`idleTimeout`/`retryOnWorkerDeath`/`notificationGroup`/`lifecycle`). Set `foreground: true` for one process or subagent whose result is needed in the same tool call; use `returnPattern`/`returnLines`/`maxBytes` to keep noisy process output bounded. Foreground and non-interactive process waits default to lifecycle `attached`, which terminates the process tree if that owning tool call is interrupted; background starts default to `detached`. Or start a named background subagent (`profile: "subagent"`, `task`, optional `name`/`agent`/`model`/`tools`/`maxDepth` and budget fields), then always collect it with `babysit_wait`. `maxDepth` defaults to 1. Subagent `continueAfterStart: true` is accepted as a compatibility alias for this default background behavior. Quick commands return inline; longer process runs notify in the background |
+| `babysit_run` | Run any command (`description` + `command`, optional `name`/`pty`/`timeout`/`idleTimeout`/`retryOnWorkerDeath`/`notificationGroup`/`lifecycle`). Set `foreground: true` for one process or subagent whose result is needed in the same tool call; use `returnPattern`/`returnLines`/`maxBytes` to keep noisy process output bounded. Foreground and non-interactive process waits default to lifecycle `attached`, which terminates the process tree if that owning tool call is interrupted; background starts default to `detached`. Or start a named background subagent (`description`, `profile: "subagent"`, `task`, optional `name`/`agent`/`model`/`tools`/`maxDepth` and budget fields), then always collect it with `babysit_wait`. `maxDepth` defaults to 1. Subagent `continueAfterStart: true` is accepted as a compatibility alias for this default background behavior. Quick commands return inline; longer process runs notify in the background |
 | `babysit_check` | Without an id, list sessions with state/kind filters. With an id, inspect bounded output, search with `pattern`, or capture a TUI with `screen: true`; `maxBytes` overrides the 4 KB default up to 24 KB |
 | `babysit_send` | Process: type `text` / press `keys` into the PTY. Subagent: steer mid-run, or send a follow-up task when confirmed settled (`mode: auto/steer/task`); explicit task mode rejects busy, parked, or unknown state |
 | `babysit_wait` | Block until done: process exit (or `expect: "regex"` readiness marker), subagent task completion. Multi-wait: up to 32 unique `ids` + `mode: "any"\|"all"` |
@@ -71,6 +71,27 @@ calls if another extension or preset re-enables `bash`, including shell
 backgrounding (`… &`, `nohup`, `setsid`, `disown`). Set
 `PI_BABYSIT_ALLOW_BASH=1` to retain direct `bash` explicitly.
 
+## Describe every run
+
+Every `babysit_run` requires a non-blank `description`, for both commands and
+subagents. Explain the purpose briefly in language the user can understand;
+`name` remains a stable session identifier, while `command` / `task` contains
+the actual execution instructions. Descriptions are trimmed before saving and
+are display metadata, not shell code or instructions sent to the subagent.
+
+```text
+babysit_run { description: "Run regression tests", command: "bun test", foreground: true }
+babysit_run { description: "Review the authentication changes", profile: "subagent", task: "Review the authentication diff for security regressions", maxTurns: 5 }
+```
+
+In Pi's main transcript the description is the prominent yellow heading, with
+the execution kind in muted gray. Expand the tool call (`Ctrl+O` by default) to
+see the full command or task in gray. Session lists, the widget, and completion
+notifications also show the description. Older saved sessions and tool calls
+without one remain readable, falling back to their command or task. Callers
+must supply a description for new runs; blank or missing values are rejected
+before launch.
+
 ## Remote processes over SSH
 
 Install a `babysit` CLI with `--host` support on both machines (tested with
@@ -79,8 +100,8 @@ SSH aliases, keys, known hosts, and ProxyJump are handled by babysit/SSH;
 pi-babysit does not install remote software or copy credentials.
 
 ```text
-babysit_run { host: "yusuke-t4", cwd: "/home/yusuke/project", command: "bun test", foreground: true, returnLines: 30 }
-babysit_run { host: "user@server", command: "python3 -i", name: "remote-repl", continueAfterStart: true }
+babysit_run { description: "Run tests on Linux", host: "yusuke-t4", cwd: "/home/yusuke/project", command: "bun test", foreground: true, returnLines: 30 }
+babysit_run { description: "Open a remote Python REPL", host: "user@server", command: "python3 -i", name: "remote-repl", continueAfterStart: true }
 babysit_check { id: "remote-repl", screen: true }
 babysit_send { id: "remote-repl", text: "print(42)" }
 babysit_kill { id: "remote-repl" }
@@ -132,9 +153,9 @@ summary counts use `RUNNING` / `IDLE`, and every row is labeled
 Click the header to toggle to `babysits(n all)`, which also shows finished and failed
 sessions, and click again to return to running-only. Both modes show newest first,
 ten per page; `< 1/4 >` shows the current/total page when needed. Click the
-arrows to page. Rows occupy one line, previewing the command for processes and
-the task for agents (with `…` when clipped). Click an AGENT or PROCESS row to
-replace the list with a tall **log viewer in the same widget area**, not an
+arrows to page. Rows occupy one line, previewing the description (or the command
+for older processes and task for older agents), with `…` when clipped. Click an
+AGENT or PROCESS row to replace the list with a tall **log viewer in the same widget area**, not an
 overlay or separate screen. `Esc` or the right-hand **Close** button restores
 the list, preserving its mode and page. The viewer uses Pi's `ScrollView` for
 scroll position and follow behavior, with a widget-local scrollbar styled using
@@ -269,7 +290,7 @@ because blindly rerunning an arbitrary command can duplicate side effects.
   must still call `babysit_wait` so the answer and nested usage are persisted.
   Unlike `agent_end`, `agent_settled` cannot precede an automatic retry,
   compaction retry, or queued continuation. A settled run containing a
-  **parked** toolResult — a `babysit_run { command }` result carrying the
+  **parked** toolResult — a `babysit_run { description, command }` result carrying the
   `[notify-on-exit]` marker (or the legacy `process` tool) — only means "turn
   parked awaiting a process-exit notification; pi resumes on its own", so the
   wait continues. The marker-bearing result may be followed by a short
@@ -280,7 +301,7 @@ because blindly rerunning an arbitrary command can duplicate side effects.
 Subagents load `self-reap.ts`, which exits an idle finished subagent after a
 grace window using the same parked-turn rule, so a subagent waiting on a long
 build is never false-killed. Callers can set `reapAfter: "5m"` on
-`babysit_run { profile: "subagent", task, reapAfter: "5m" }`. Omission uses
+`babysit_run { description, profile: "subagent", task, reapAfter: "5m" }`. Omission uses
 `PI_BABYSIT_REAP_AFTER`, then `PI_SUBAGENT_REAP_AFTER`, then 120s.
 `reapAfter: "none"` (also `"off"` or `"0"`) disables idle reaping; the absolute
 `timeout` still applies. Follow-up tasks cancel the idle timer. This differs

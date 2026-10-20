@@ -3775,9 +3775,7 @@ export default function (pi: ExtensionAPI) {
 	const declaredToolErrors = new Set<string>();
 	const sessionRpcTails = new Map<string, Promise<void>>();
 
-	const backgroundTaskToolsPresent = backgroundTaskToolsOwnBash(
-		typeof pi.getAllTools === "function" ? pi.getAllTools().map((tool) => tool.name) : [],
-	);
+	let backgroundTaskToolsPresent = false;
 	async function withSessionRpcLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
 		const previous = sessionRpcTails.get(id) ?? Promise.resolve();
 		let release!: () => void;
@@ -4269,6 +4267,9 @@ export default function (pi: ExtensionAPI) {
 
 	let polling = false;
 	pi.on("session_start", async (_event, ctx) => {
+		backgroundTaskToolsPresent = backgroundTaskToolsOwnBash(
+			typeof pi.getAllTools === "function" ? pi.getAllTools().map((tool) => tool.name) : [],
+		);
 		// Do not expose the built-in bash tool only to reject it after the model has
 		// already paid for a failed tool turn. The tool_call hook remains a fallback
 		// if another extension/preset re-enables bash later in the session.

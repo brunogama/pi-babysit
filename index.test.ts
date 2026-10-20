@@ -19,6 +19,7 @@ import { discoverAgents } from "./agents.ts";
 import extension, {
 	subagentReuseHint,
 	activeToolsWithoutDirectBash,
+	backgroundTaskToolsOwnBash,
 	automaticNotificationGroup,
 	babysitSpawnInstallHint,
 	buildProcessCompletionMessage,
@@ -2711,7 +2712,7 @@ test("babysit_kill returns success only after terminal state is persisted", asyn
 	}
 });
 
-test("direct bash policy only supports the explicit escape hatch", () => {
+test("direct bash policy supports the explicit escape hatch and background-task ownership", () => {
 	for (const command of [
 		"pwd",
 		"git status --short",
@@ -2721,11 +2722,18 @@ test("direct bash policy only supports the explicit escape hatch", () => {
 	]) {
 		expect(isAllowedDirectBash(command)).toBe(false);
 	}
+	expect(isAllowedDirectBash("anything", true)).toBe(true);
 	const previous = process.env.PI_BABYSIT_ALLOW_BASH;
 	process.env.PI_BABYSIT_ALLOW_BASH = "1";
 	expect(isAllowedDirectBash("anything")).toBe(true);
 	if (previous === undefined) delete process.env.PI_BABYSIT_ALLOW_BASH;
 	else process.env.PI_BABYSIT_ALLOW_BASH = previous;
+});
+
+test("background task tools own native bash only when their launcher and inspector exist", () => {
+	expect(backgroundTaskToolsOwnBash(["bash_bg", "jobs"])).toBe(true);
+	expect(backgroundTaskToolsOwnBash(["bash_bg"])).toBe(false);
+	expect(backgroundTaskToolsOwnBash(["jobs"])).toBe(false);
 });
 
 test("built-in bash is removed from the active tool set unless explicitly allowed", async () => {

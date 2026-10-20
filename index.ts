@@ -3674,9 +3674,21 @@ function backgroundsItself(command: string): boolean {
 	return false;
 }
 
-/** Emergency escape hatch only. All ordinary shell commands go through babysit_run. */
-export function isAllowedDirectBash(_command: string): boolean {
-	return process.env.PI_BABYSIT_ALLOW_BASH === "1";
+/** Return true when explicit configuration or the background-task extension owns shell execution. */
+export function isAllowedDirectBash(
+	_command: string,
+	backgroundTaskToolsPresent = false,
+): boolean {
+	return backgroundTaskToolsPresent || process.env.PI_BABYSIT_ALLOW_BASH === "1";
+}
+
+/**
+ * `pi-patty-bg-tasks` owns native shell execution when it has registered both
+ * its launcher and inspection tools. Keep babysit available as opt-in
+ * supervision, but never intercept ordinary shell commands in that mode.
+ */
+export function backgroundTaskToolsOwnBash(toolNames: readonly string[]): boolean {
+	return toolNames.includes("bash_bg") && toolNames.includes("jobs");
 }
 
 export function activeToolsWithoutDirectBash(activeTools: string[], allowDirectBash: boolean): string[] {
@@ -3763,6 +3775,9 @@ export default function (pi: ExtensionAPI) {
 	const declaredToolErrors = new Set<string>();
 	const sessionRpcTails = new Map<string, Promise<void>>();
 
+	const backgroundTaskToolsPresent = backgroundTaskToolsOwnBash(
+		typeof pi.getAllTools === "function" ? pi.getAllTools().map((tool) => tool.name) : [],
+	);
 	async function withSessionRpcLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
 		const previous = sessionRpcTails.get(id) ?? Promise.resolve();
 		let release!: () => void;
@@ -4260,7 +4275,7 @@ export default function (pi: ExtensionAPI) {
 		const activeTools = pi.getActiveTools();
 		const supervisedTools = activeToolsWithoutDirectBash(
 			activeTools,
-			isAllowedDirectBash(""),
+			isAllowedDirectBash("", backgroundTaskToolsPresent),
 		);
 		if (supervisedTools.length !== activeTools.length) pi.setActiveTools(supervisedTools);
 
@@ -4389,6 +4404,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (event.toolName !== "bash") return;
 		const command = String((event.input as { command?: unknown }).command ?? "");
+		if (isAllowedDirectBash(command, backgroundTaskToolsPresent)) return;
 		if (backgroundsItself(command)) {
 			return {
 				block: true,
@@ -4397,7 +4413,6 @@ export default function (pi: ExtensionAPI) {
 					`babysit_run({ description: "Describe this background process's purpose", name: "background-process", command: ${JSON.stringify(command.replace(/\s*&\s*$/, ""))} })`,
 			};
 		}
-		if (isAllowedDirectBash(command)) return;
 		return {
 			block: true,
 			reason:
